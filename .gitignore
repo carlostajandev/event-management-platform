@@ -1,0 +1,63 @@
+@ -0,0 +1,62 @@
+### EVENT MANAGEMENT PLATFORM ###
+
+### Java ###
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+### Logs ###
+logs/
+*.log
+
+### IDE ###
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+### OS ###
+.DS_Store
+Thumbs.db
+*.swp
+
+### Docker local data ###
+localstack-data/
+dynamodb-local-data/
+data/
+
+### AWS credentials ###
+.aws/
+.env
+*.env
+*.pem
+*.key
+*.crt
+secrets/
+
+### Test reports ###
+coverage/
+jacoco.exec
+test-output/
+
+### Local DB ###
+*.db
+*.sqlite
+*.sqlite3
+
+### Temporary files ###
+*.tmp
+*.bak
+*.old
+
+### Spring profiles ###
+application-local.yml
+application-dev.yml
+application-prod.yml
+
+### Node ###
+node_modules/

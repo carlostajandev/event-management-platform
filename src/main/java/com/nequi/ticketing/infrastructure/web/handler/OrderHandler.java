@@ -1,6 +1,7 @@
 package com.nequi.ticketing.infrastructure.web.handler;
 
 import com.nequi.ticketing.application.dto.ReserveTicketsCommand;
+import com.nequi.ticketing.application.port.in.QueryOrderStatusUseCase;
 import com.nequi.ticketing.application.port.in.ReserveTicketsUseCase;
 import jakarta.validation.Validator;
 import org.springframework.http.HttpStatus;
@@ -12,9 +13,6 @@ import reactor.core.publisher.Mono;
 
 /**
  * WebFlux handler for Order/Reservation endpoints.
- *
- * <p>Extracts the X-Idempotency-Key header and injects it into the command
- * before delegating to the use case.
  */
 @Component
 public class OrderHandler {
@@ -22,20 +20,23 @@ public class OrderHandler {
     private static final String IDEMPOTENCY_KEY_HEADER = "X-Idempotency-Key";
 
     private final ReserveTicketsUseCase reserveTicketsUseCase;
+    private final QueryOrderStatusUseCase queryOrderStatusUseCase;
     private final Validator validator;
 
-    public OrderHandler(ReserveTicketsUseCase reserveTicketsUseCase, Validator validator) {
+    public OrderHandler(
+            ReserveTicketsUseCase reserveTicketsUseCase,
+            QueryOrderStatusUseCase queryOrderStatusUseCase,
+            Validator validator) {
         this.reserveTicketsUseCase = reserveTicketsUseCase;
+        this.queryOrderStatusUseCase = queryOrderStatusUseCase;
         this.validator = validator;
     }
 
     /**
      * POST /api/v1/orders
-     * Creates a reservation and returns 201 with orderId and expiry time.
      */
     public Mono<ServerResponse> createOrder(ServerRequest request) {
-        String idempotencyKey = request.headers()
-                .firstHeader(IDEMPOTENCY_KEY_HEADER);
+        String idempotencyKey = request.headers().firstHeader(IDEMPOTENCY_KEY_HEADER);
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             return ServerResponse.badRequest()
@@ -44,14 +45,24 @@ public class OrderHandler {
 
         return request.bodyToMono(ReserveTicketsCommand.class)
                 .map(cmd -> new ReserveTicketsCommand(
-                        cmd.eventId(),
-                        cmd.userId(),
-                        cmd.quantity(),
-                        idempotencyKey))
+                        cmd.eventId(), cmd.userId(), cmd.quantity(), idempotencyKey))
                 .flatMap(this::validate)
                 .flatMap(reserveTicketsUseCase::execute)
                 .flatMap(response -> ServerResponse
                         .status(HttpStatus.CREATED)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue(response));
+    }
+
+    /**
+     * GET /api/v1/orders/{orderId}
+     */
+    public Mono<ServerResponse> getOrderStatus(ServerRequest request) {
+        String orderId = request.pathVariable("orderId");
+
+        return queryOrderStatusUseCase.findById(orderId)
+                .flatMap(response -> ServerResponse
+                        .ok()
                         .contentType(MediaType.APPLICATION_JSON)
                         .bodyValue(response));
     }

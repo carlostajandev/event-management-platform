@@ -1,4 +1,4 @@
-package com.nequi.ticketing.domain.service;
+package com.nequi.ticketing.domain;
 
 import com.nequi.ticketing.domain.model.Event;
 import com.nequi.ticketing.domain.valueobject.Money;

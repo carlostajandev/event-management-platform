@@ -60,15 +60,15 @@ module "iam" {
 module "ecs" {
   source = "./modules/ecs"
 
-  app_name           = var.app_name
-  environment        = var.environment
-  aws_region         = var.aws_region
-  app_image          = var.app_image
-  app_port           = var.app_port
-  task_cpu           = var.ecs_task_cpu
-  task_memory        = var.ecs_task_memory
-  ecs_min_capacity   = var.ecs_min_capacity
-  ecs_max_capacity   = var.ecs_max_capacity
+  app_name         = var.app_name
+  environment      = var.environment
+  aws_region       = var.aws_region
+  app_image        = var.app_image
+  app_port         = var.app_port
+  task_cpu         = var.ecs_task_cpu
+  task_memory      = var.ecs_task_memory
+  ecs_min_capacity = var.ecs_min_capacity
+  ecs_max_capacity = var.ecs_max_capacity
 
   vpc_id             = module.networking.vpc_id
   public_subnet_ids  = module.networking.public_subnet_ids

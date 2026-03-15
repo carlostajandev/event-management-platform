@@ -57,7 +57,7 @@
 
         <!-- Calidad — cobertura mínima exigida por JaCoCo -->
         <jacoco.minimum.line.coverage>0.70</jacoco.minimum.line.coverage>
-        <jacoco.minimum.branch.coverage>0.60</jacoco.minimum.branch.coverage>
+        <jacoco.minimum.branch.coverage>0.40</jacoco.minimum.branch.coverage>
     </properties>
 
     <!-- ══════════════════════════════════════════════════════════

@@ -71,16 +71,16 @@ resource "aws_ecs_task_definition" "app" {
 
     environment = [
       { name = "SPRING_PROFILES_ACTIVE", value = var.environment },
-      { name = "SERVER_PORT",            value = tostring(var.app_port) },
-      { name = "AWS_REGION",             value = var.aws_region },
-      { name = "DYNAMODB_TABLE_EVENTS",  value = var.dynamodb_tables.events },
+      { name = "SERVER_PORT", value = tostring(var.app_port) },
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "DYNAMODB_TABLE_EVENTS", value = var.dynamodb_tables.events },
       { name = "DYNAMODB_TABLE_TICKETS", value = var.dynamodb_tables.tickets },
-      { name = "DYNAMODB_TABLE_ORDERS",  value = var.dynamodb_tables.orders },
+      { name = "DYNAMODB_TABLE_ORDERS", value = var.dynamodb_tables.orders },
       { name = "DYNAMODB_TABLE_IDEMPOTENCY", value = var.dynamodb_tables.idempotency },
-      { name = "DYNAMODB_TABLE_AUDIT",   value = var.dynamodb_tables.audit },
-      { name = "SQS_QUEUE_ORDERS",       value = var.sqs_queue_url },
+      { name = "DYNAMODB_TABLE_AUDIT", value = var.dynamodb_tables.audit },
+      { name = "SQS_QUEUE_ORDERS", value = var.sqs_queue_url },
       { name = "RESERVATION_TTL_MINUTES", value = tostring(var.reservation_ttl_minutes) },
-      { name = "LOG_LEVEL_APP",          value = var.log_level },
+      { name = "LOG_LEVEL_APP", value = var.log_level },
     ]
 
     logConfiguration = {

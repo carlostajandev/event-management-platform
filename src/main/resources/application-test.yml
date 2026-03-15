@@ -1,0 +1,60 @@
+# ══════════════════════════════════════════════════════════════
+#  Perfil TEST
+#  Se activa automáticamente con @ActiveProfiles("test")
+#  Los endpoints reales de AWS los provee Testcontainers/LocalStack.
+#  Nunca apunta a infra real — los valores son sobrescritos en cada
+#  @SpringBootTest por las propiedades del contenedor levantado.
+# ══════════════════════════════════════════════════════════════
+
+spring:
+  config:
+    activate:
+      on-profile: test
+
+  # Desactiva la inicialización de beans AWS en contexto de test puro
+  # (los tests de integración con Testcontainers lo sobreescriben)
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration
+
+aws:
+  access-key-id: test
+  secret-access-key: test
+  region: us-east-1
+  dynamodb:
+    endpoint: http://localhost:8000   # Sobrescrito por Testcontainers
+    tables:
+      events:      test-events
+      tickets:     test-tickets
+      orders:      test-orders
+      idempotency: test-idempotency
+      audit:       test-audit
+  sqs:
+    endpoint: http://localhost:4566   # Sobrescrito por Testcontainers
+    queues:
+      purchase-orders:     test-purchase-orders
+      purchase-orders-dlq: test-purchase-orders-dlq
+    consumer:
+      polling-interval: 1000          # Más rápido en tests
+
+ticketing:
+  reservation:
+    ttl-minutes: 1                    # TTL corto para tests de expiración
+    expiry-job-interval: 500
+  idempotency:
+    ttl-hours: 1
+  max-tickets-per-order: 10
+
+# Desactiva rate limiting en tests para no interferir con carga paralela
+resilience4j:
+  ratelimiter:
+    instances:
+      purchase-api:
+        limit-for-period: 10000
+        limit-refresh-period: 1s
+        timeout-duration: 0s
+
+logging:
+  level:
+    com.nequi.ticketing: DEBUG
+    software.amazon.awssdk: WARN

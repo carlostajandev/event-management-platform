@@ -1,0 +1,426 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PARENT — Spring Boot 4 BOM gestiona versiones transitivas
+         ══════════════════════════════════════════════════════════ -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.3</version>
+        <relativePath/>
+    </parent>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PROJECT COORDINATES
+         ══════════════════════════════════════════════════════════ -->
+    <groupId>com.nequi</groupId>
+    <artifactId>event-management-platform</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>event-management-platform</name>
+    <description>
+        Reactive ticketing platform — Clean Architecture, Spring Boot 4,
+        WebFlux, DynamoDB, SQS. Prueba técnica Nequi.
+    </description>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PROPERTIES — versiones centralizadas, sin duplicación
+         ══════════════════════════════════════════════════════════ -->
+    <properties>
+        <!-- Java 21 LTS — elegido conscientemente sobre Java 25 Early Access.
+             AWS SDK v2, Resilience4j y Testcontainers tienen soporte
+             certificado contra Java 21. Virtual Threads en release final. -->
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
+
+        <!-- AWS SDK v2 — versión fijada en 2.20.26 para compatibilidad
+             con DynamoDB Local. Versiones superiores tienen incompatibilidad
+             de firma AWS4 con DynamoDB Local en desarrollo. -->
+        <aws.sdk.version>2.20.26</aws.sdk.version>
+
+        <!-- Librerías de aplicación -->
+        <mapstruct.version>1.6.3</mapstruct.version>
+        <resilience4j.version>2.3.0</resilience4j.version>
+        <logstash.encoder.version>8.0</logstash.encoder.version>
+        <shedlock.version>6.0.1</shedlock.version>
+
+        <!-- Librerías de test -->
+        <testcontainers.version>1.20.4</testcontainers.version>
+
+        <!-- Calidad — cobertura mínima exigida por JaCoCo -->
+        <jacoco.minimum.line.coverage>0.80</jacoco.minimum.line.coverage>
+        <jacoco.minimum.branch.coverage>0.70</jacoco.minimum.branch.coverage>
+    </properties>
+
+    <!-- ══════════════════════════════════════════════════════════
+         DEPENDENCY MANAGEMENT — BOM imports
+         ══════════════════════════════════════════════════════════ -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- AWS SDK v2 BOM — gestiona todas las versiones del SDK -->
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws.sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Testcontainers BOM -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- ══════════════════════════════════════════════════════════
+         DEPENDENCIES
+         ══════════════════════════════════════════════════════════ -->
+    <dependencies>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  SPRING BOOT — núcleo reactivo                      │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- WebFlux sobre Netty — modelo non-blocking, throughput
+             superior a MVC para I/O intensivo (DynamoDB, SQS) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <!-- Bean Validation (Jakarta) — @NotBlank, @Min, @Max en DTOs -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Actuator — /health, /metrics, /prometheus, /info -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Configuration processor — genera metadata para IDEs -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  AWS SDK v2 — DynamoDB + SQS                        │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- DynamoDB Enhanced Client — API de alto nivel, non-blocking -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb-enhanced</artifactId>
+        </dependency>
+
+        <!-- SQS async client — publicación y consumo de mensajes -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sqs</artifactId>
+        </dependency>
+
+        <!-- Netty HTTP client — para llamadas AWS async en WebFlux -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+        </dependency>
+
+        <!-- URL connection client — para DynamoDbTableInitializer
+             (@PostConstruct necesita cliente síncrono puro Java,
+             sin Netty event loop) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  RESILIENCE4J — tolerancia a fallos                 │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- Operadores Reactor: .transformDeferred(CircuitBreakerOperator) -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-reactor</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+
+        <!-- Auto-config Spring Boot 3/4 para @CircuitBreaker, @Retry -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  SHEDLOCK — scheduler distribuido                   │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- Previene que N instancias ECS ejecuten el scheduler N veces.
+             Solo UNA instancia ejecuta el job de expiración por ciclo. -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>${shedlock.version}</version>
+        </dependency>
+
+        <!-- Provider DynamoDB para ShedLock — usa emp-shedlock table -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-dynamodb2</artifactId>
+            <version>${shedlock.version}</version>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  OBSERVABILIDAD                                      │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- Prometheus — expone métricas en /actuator/prometheus
+             para Grafana / CloudWatch en producción -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- Logstash encoder — logs JSON estructurados con correlationId,
+             orderId, userId para CloudWatch / ELK en producción -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>${logstash.encoder.version}</version>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  SERIALIZACIÓN                                       │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- Jackson JSR310 — soporte para java.time en Jackson 2
+             (usado por AWS SDK y algunas libs legacy) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  MAPSTRUCT — mappers en compile-time                 │
+             └─────────────────────────────────────────────────────┘ -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>${mapstruct.version}</version>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  LOMBOK — boilerplate reduction (compile only)       │
+             └─────────────────────────────────────────────────────┘ -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ┌─────────────────────────────────────────────────────┐
+             │  TEST                                                │
+             └─────────────────────────────────────────────────────┘ -->
+
+        <!-- JUnit 5 + Mockito + AssertJ + WebTestClient -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- @WebFluxTest en Spring Boot 4 — movido a nuevo paquete
+             org.springframework.boot.webflux.test.autoconfigure -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- @WebFluxTest slice support (autoconfigure) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-test-autoconfigure</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- StepVerifier — test de Mono y Flux reactivos -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers JUnit 5 integration -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- LocalStack — emula DynamoDB + SQS en integration tests -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>localstack</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Spring Boot Testcontainers integration -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- ══════════════════════════════════════════════════════════
+         BUILD PLUGINS
+         ══════════════════════════════════════════════════════════ -->
+    <build>
+        <plugins>
+
+            <!-- ┌───────────────────────────────────────────────────┐
+                 │  COMPILER — procesadores en orden correcto         │
+                 │  REGLA: Lombok PRIMERO, luego MapStruct.           │
+                 │  MapStruct usa los getters/setters de Lombok.      │
+                 └───────────────────────────────────────────────────┘ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                        <path>
+                            <groupId>org.mapstruct</groupId>
+                            <artifactId>mapstruct-processor</artifactId>
+                            <version>${mapstruct.version}</version>
+                        </path>
+                        <path>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-configuration-processor</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
+            <!-- ┌───────────────────────────────────────────────────┐
+                 │  SPRING BOOT — fat JAR ejecutable                  │
+                 │  Excluye Lombok del artefacto final (compile only) │
+                 └───────────────────────────────────────────────────┘ -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- ┌───────────────────────────────────────────────────┐
+                 │  SUREFIRE — ejecución de tests JUnit 5             │
+                 │  argLine con @{argLine} para inyección JaCoCo      │
+                 └───────────────────────────────────────────────────┘ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>@{argLine}</argLine>
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*Tests.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+
+            <!-- ┌───────────────────────────────────────────────────┐
+                 │  JACOCO — cobertura mínima obligatoria             │
+                 │  Line: 80% | Branch: 70%                           │
+                 │  Falla el build si no se cumple.                   │
+                 └───────────────────────────────────────────────────┘ -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <executions>
+                    <!-- Instrumenta bytecode antes de los tests -->
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <!-- Genera reporte HTML en target/site/jacoco -->
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <!-- Valida cobertura mínima — falla si no se cumple -->
+                    <execution>
+                        <id>check-coverage</id>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.minimum.line.coverage}</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.minimum.branch.coverage}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                            <!-- Excluye clases sin lógica de negocio testeable -->
+                            <excludes>
+                                <exclude>**/config/**</exclude>
+                                <exclude>**/entity/**</exclude>
+                                <exclude>**/*Application*</exclude>
+                                <exclude>**/dto/**</exclude>
+                                <exclude>**/mapper/**</exclude>
+                                <exclude>**/shared/logging/**</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+        </plugins>
+    </build>
+
+</project>

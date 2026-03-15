@@ -1,6 +1,6 @@
 package com.nequi.ticketing.application.usecase;
 
-import tools.jackson.databind.json.JsonMapper;
+
 import com.nequi.ticketing.application.dto.ReservationResponse;
 import com.nequi.ticketing.application.dto.ReserveTicketsCommand;
 import com.nequi.ticketing.domain.exception.EventNotFoundException;
@@ -58,9 +58,14 @@ class ReserveTicketsServiceTest {
         TicketingProperties properties = new TicketingProperties(
                 new TicketingProperties.ReservationProperties(10, 60000),
                 new TicketingProperties.IdempotencyProperties(24),
+                new TicketingProperties.PaginationProperties(20, 100),
+                new TicketingProperties.CorsProperties(java.util.List.of("http://localhost:3000")),
                 10
         );
-        JsonMapper objectMapper = JsonMapper.builder().findAndAddModules().build();
+        tools.jackson.databind.json.JsonMapper objectMapper =
+                tools.jackson.databind.json.JsonMapper.builder()
+                        .findAndAddModules()
+                        .build();
 
         service = new ReserveTicketsService(
                 eventRepository, ticketRepository, idempotencyRepository,
@@ -100,7 +105,8 @@ class ReserveTicketsServiceTest {
     @DisplayName("should return cached response on duplicate idempotency key")
     void shouldReturnCachedResponseOnDuplicate() throws Exception {
         ReserveTicketsCommand command = validCommand(1);
-        JsonMapper mapper = JsonMapper.builder().findAndAddModules().build();
+        tools.jackson.databind.json.JsonMapper mapper =
+                tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
         ReservationResponse cached = new ReservationResponse(
                 "ord_cached", command.eventId(), command.userId(), 1,
                 List.of("tkt_123"), Instant.now(), Instant.now().plusSeconds(600), "RESERVED");
@@ -116,6 +122,7 @@ class ReserveTicketsServiceTest {
                 })
                 .verifyComplete();
 
+        // Must NOT process a new reservation
         verify(eventRepository, never()).findById(any());
         verify(ticketRepository, never()).update(any());
     }
@@ -128,6 +135,7 @@ class ReserveTicketsServiceTest {
 
         when(idempotencyRepository.exists(any())).thenReturn(Mono.just(false));
         when(eventRepository.findById(any())).thenReturn(Mono.just(event));
+        // Only 2 available, requested 5
         when(ticketRepository.findAvailableByEventId(any(), eq(5)))
                 .thenReturn(Flux.fromIterable(List.of(
                         availableTicket(command.eventId()),
@@ -162,6 +170,7 @@ class ReserveTicketsServiceTest {
         when(eventRepository.findById(any())).thenReturn(Mono.just(event));
         when(ticketRepository.findAvailableByEventId(any(), eq(1)))
                 .thenReturn(Flux.just(available));
+        // Simulate concurrent modification
         when(ticketRepository.update(any()))
                 .thenReturn(Mono.error(new RuntimeException("Concurrent modification")));
 
@@ -170,7 +179,7 @@ class ReserveTicketsServiceTest {
                 .verify();
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Helpers ─────────────────────────────────────────────────────────────
 
     private ReserveTicketsCommand validCommand(int quantity) {
         return new ReserveTicketsCommand(

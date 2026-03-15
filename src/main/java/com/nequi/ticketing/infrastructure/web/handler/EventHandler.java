@@ -14,16 +14,8 @@ import reactor.core.publisher.Mono;
 /**
  * WebFlux functional handler for Event endpoints.
  *
- * <p>Functional routing style (RouterFunction + HandlerFunction) is
- * preferred over @RestController in reactive systems because:
- * - Routes are explicit and centralized in the Router class
- * - Handlers are pure functions, easier to test without MockMvc
- * - No reflection-based routing — better performance
- *
- * <p>This handler never contains business logic — it only:
- * 1. Extracts input from the request
- * 2. Delegates to the use case
- * 3. Builds the HTTP response
+ * <p>Supports pagination via query params:
+ * GET /api/v1/events?page=0&size=20
  */
 @Component
 public class EventHandler {
@@ -43,7 +35,6 @@ public class EventHandler {
 
     /**
      * POST /api/v1/events
-     * Creates a new event and returns 201 Created.
      */
     public Mono<ServerResponse> createEvent(ServerRequest request) {
         return request.bodyToMono(CreateEventRequest.class)
@@ -57,11 +48,9 @@ public class EventHandler {
 
     /**
      * GET /api/v1/events/{eventId}
-     * Returns a single event or 404 if not found.
      */
     public Mono<ServerResponse> getEvent(ServerRequest request) {
         String eventId = request.pathVariable("eventId");
-
         return getEventUseCase.findById(eventId)
                 .flatMap(response -> ServerResponse
                         .ok()
@@ -70,15 +59,34 @@ public class EventHandler {
     }
 
     /**
-     * GET /api/v1/events
-     * Returns all events as a JSON array.
+     * GET /api/v1/events?page=0&size=20
+     * Supports pagination via query parameters.
+     * Defaults to page=0, size=20 if not provided.
      */
     public Mono<ServerResponse> getAllEvents(ServerRequest request) {
-        return ServerResponse
-                .ok()
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(getEventUseCase.findAll(), 
-                      com.nequi.ticketing.application.dto.EventResponse.class);
+        int page = request.queryParam("page")
+                .map(Integer::parseInt)
+                .orElse(0);
+        int size = request.queryParam("size")
+                .map(Integer::parseInt)
+                .orElse(20);
+
+        if (page < 0 || size <= 0 || size > 100) {
+            return ServerResponse.badRequest()
+                    .bodyValue("Invalid pagination: page >= 0, 0 < size <= 100");
+        }
+
+        long offset = (long) page * size;
+
+        return getEventUseCase.findAll()
+                .skip(offset)
+                .take(size)
+                .collectList()
+                .flatMap(items -> ServerResponse
+                        .ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue(new com.nequi.ticketing.application.dto.PagedResponse<>(
+                                items, page, size, items.size() == size)));
     }
 
     private <T> Mono<T> validate(T body) {

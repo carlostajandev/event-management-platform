@@ -2,6 +2,8 @@ package com.nequi.ticketing.infrastructure.messaging.sqs.producer;
 
 import com.nequi.ticketing.application.port.out.MessagePublisher;
 import com.nequi.ticketing.infrastructure.config.AwsProperties;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -28,6 +30,8 @@ public class SqsMessagePublisher implements MessagePublisher {
         this.queueUrl = awsProperties.sqs().queues().purchaseOrders();
     }
 
+    @CircuitBreaker(name = "sqs")
+    @Retry(name = "sqs-publish")
     @Override
     public Mono<String> publishPurchaseOrder(String messageBody, String messageGroupId) {
         SendMessageRequest request = SendMessageRequest.builder()

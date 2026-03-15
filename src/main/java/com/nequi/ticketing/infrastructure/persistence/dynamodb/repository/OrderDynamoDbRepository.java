@@ -6,6 +6,7 @@ import com.nequi.ticketing.domain.valueobject.OrderId;
 import com.nequi.ticketing.infrastructure.config.AwsProperties;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.entity.OrderDynamoDbEntity;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.mapper.OrderDynamoDbMapper;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
@@ -39,6 +40,7 @@ public class OrderDynamoDbRepository implements OrderRepository {
         this.mapper = mapper;
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Order> save(Order order) {
         OrderDynamoDbEntity entity = mapper.toEntity(order);
@@ -47,6 +49,7 @@ public class OrderDynamoDbRepository implements OrderRepository {
                 .doOnSuccess(o -> log.debug("Order saved: orderId={}", o.orderId().value()));
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Order> findById(OrderId orderId) {
         Key key = Key.builder().partitionValue(orderId.value()).build();
@@ -54,6 +57,7 @@ public class OrderDynamoDbRepository implements OrderRepository {
                 .map(mapper::toDomain);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Order> update(Order order) {
         OrderDynamoDbEntity entity = mapper.toEntity(order);

@@ -1,9 +1,6 @@
 # ══════════════════════════════════════════════════════════════
 #  Event Management Platform — application.yml
 #  Spring Boot 4.0.3 / WebFlux / DynamoDB / SQS
-#
-#  REGLA: ningún valor sensible hardcodeado aquí.
-#  Todo lo que cambia por entorno viene de variables de entorno.
 # ══════════════════════════════════════════════════════════════
 
 spring:
@@ -17,7 +14,9 @@ spring:
     virtual:
       enabled: true
 
-  # Jackson — ISO-8601, sin nulls en respuestas
+  # Jackson 3 (tools.jackson) — Spring Boot 4
+  # Dates serialized as ISO-8601 strings, not timestamps
+  # Unknown JSON properties ignored for forward compatibility
   jackson:
     default-property-inclusion: non_null
     time-zone: UTC
@@ -76,6 +75,13 @@ ticketing:
   idempotency:
     ttl-hours:           ${IDEMPOTENCY_TTL_HOURS:24}
   max-tickets-per-order: ${MAX_TICKETS_PER_ORDER:10}
+  pagination:
+    default-page-size: ${PAGINATION_DEFAULT_SIZE:20}
+    max-page-size:     ${PAGINATION_MAX_SIZE:100}
+  cors:
+    allowed-origins:
+      - ${CORS_ALLOWED_ORIGIN_1:http://localhost:3000}
+      - ${CORS_ALLOWED_ORIGIN_2:http://localhost:4200}
 
 # ── Resilience4j ──────────────────────────────────────────────
 resilience4j:
@@ -85,6 +91,11 @@ resilience4j:
         max-attempts: 3
         wait-duration: 200ms
         exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException
+        ignore-exceptions:
+          - com.nequi.ticketing.domain.exception.TicketNotAvailableException
+          - com.nequi.ticketing.domain.exception.OrderNotFoundException
       sqs-publish:
         max-attempts: 3
         wait-duration: 500ms
@@ -97,13 +108,18 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 5
+      sqs:
+        sliding-window-size: 10
+        failure-rate-threshold: 60
+        wait-duration-in-open-state: 20s
+        permitted-number-of-calls-in-half-open-state: 3
 
   ratelimiter:
     instances:
       purchase-api:
-        limit-for-period: ${RATE_LIMIT_PER_SECOND:100}
+        limit-for-period:    ${RATE_LIMIT_PER_SECOND:100}
         limit-refresh-period: 1s
-        timeout-duration: 0s
+        timeout-duration:    0s
 
 # ── Logging ───────────────────────────────────────────────────
 logging:
@@ -112,3 +128,5 @@ logging:
     com.nequi.ticketing: ${LOG_LEVEL_APP:DEBUG}
     software.amazon.awssdk: WARN
     reactor.netty: WARN
+
+# ── Paginación ────────────────────────────────────────────────

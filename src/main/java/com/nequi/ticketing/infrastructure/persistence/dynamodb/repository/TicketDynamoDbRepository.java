@@ -8,6 +8,7 @@ import com.nequi.ticketing.domain.valueobject.TicketId;
 import com.nequi.ticketing.infrastructure.config.AwsProperties;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.entity.TicketDynamoDbEntity;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.mapper.TicketDynamoDbMapper;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
@@ -46,6 +47,7 @@ public class TicketDynamoDbRepository implements TicketRepository {
         this.mapper = mapper;
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Ticket> save(Ticket ticket) {
         TicketDynamoDbEntity entity = mapper.toEntity(ticket);
@@ -53,6 +55,7 @@ public class TicketDynamoDbRepository implements TicketRepository {
                 .thenReturn(ticket);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Ticket> findById(TicketId ticketId) {
         Key key = Key.builder().partitionValue(ticketId.value()).build();
@@ -60,6 +63,7 @@ public class TicketDynamoDbRepository implements TicketRepository {
                 .map(mapper::toDomain);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Flux<Ticket> findByEventIdAndStatus(EventId eventId, TicketStatus status) {
         QueryConditional queryConditional = QueryConditional.keyEqualTo(
@@ -73,10 +77,11 @@ public class TicketDynamoDbRepository implements TicketRepository {
                 .build();
 
         return Flux.from(table.index(GSI_NAME).query(request)
-                .flatMapIterable(page -> page.items()))
+                        .flatMapIterable(page -> page.items()))
                 .map(mapper::toDomain);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Flux<Ticket> findAvailableByEventId(EventId eventId, int limit) {
         QueryConditional queryConditional = QueryConditional.keyEqualTo(
@@ -91,15 +96,17 @@ public class TicketDynamoDbRepository implements TicketRepository {
                 .build();
 
         return Flux.from(table.index(GSI_NAME).query(request)
-                .flatMapIterable(page -> page.items()))
+                        .flatMapIterable(page -> page.items()))
                 .map(mapper::toDomain);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Long> countByEventIdAndStatus(EventId eventId, TicketStatus status) {
         return findByEventIdAndStatus(eventId, status).count();
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Flux<Ticket> findExpiredReservations(Instant before) {
         // Scan for RESERVED tickets where expiresAt < before
@@ -111,6 +118,7 @@ public class TicketDynamoDbRepository implements TicketRepository {
                         && ticket.expiresAt().isBefore(before));
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Ticket> update(Ticket ticket) {
         TicketDynamoDbEntity entity = mapper.toEntity(ticket);
@@ -138,6 +146,7 @@ public class TicketDynamoDbRepository implements TicketRepository {
                                 + ticket.ticketId().value()));
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Flux<Ticket> saveAll(Flux<Ticket> tickets) {
         return tickets.flatMap(this::save);

@@ -6,6 +6,7 @@ import com.nequi.ticketing.domain.valueobject.EventId;
 import com.nequi.ticketing.infrastructure.config.AwsProperties;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.entity.EventDynamoDbEntity;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.mapper.EventDynamoDbMapper;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
@@ -50,6 +51,7 @@ public class EventDynamoDbRepository implements EventRepository {
         this.mapper = mapper;
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Event> save(Event event) {
         EventDynamoDbEntity entity = mapper.toEntity(event);
@@ -70,6 +72,7 @@ public class EventDynamoDbRepository implements EventRepository {
                 .doOnSuccess(e -> log.debug("Event saved: eventId={}", e.eventId().value()));
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Event> findById(EventId eventId) {
         Key key = Key.builder().partitionValue(eventId.value()).build();
@@ -78,12 +81,14 @@ public class EventDynamoDbRepository implements EventRepository {
                 .map(mapper::toDomain);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Flux<Event> findAll() {
         return Flux.from(table.scan(ScanEnhancedRequest.builder().build()).items())
                 .map(mapper::toDomain);
     }
 
+    @CircuitBreaker(name = "dynamodb")
     @Override
     public Mono<Event> update(Event event) {
         EventDynamoDbEntity entity = mapper.toEntity(event);

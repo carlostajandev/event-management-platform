@@ -1,7 +1,6 @@
 package com.nequi.ticketing.application.usecase;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.json.JsonMapper;
 import com.nequi.ticketing.application.dto.CreatePurchaseOrderCommand;
 import com.nequi.ticketing.application.port.out.MessagePublisher;
 import com.nequi.ticketing.domain.model.Order;
@@ -40,7 +39,7 @@ class CreatePurchaseOrderServiceTest {
 
     @BeforeEach
     void setUp() {
-        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        JsonMapper objectMapper = JsonMapper.builder().findAndAddModules().build();
         service = new CreatePurchaseOrderService(orderRepository, messagePublisher, objectMapper);
     }
 

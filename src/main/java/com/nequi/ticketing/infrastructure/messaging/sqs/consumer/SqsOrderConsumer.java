@@ -1,6 +1,6 @@
 package com.nequi.ticketing.infrastructure.messaging.sqs.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.nequi.ticketing.application.usecase.CreatePurchaseOrderService.OrderMessage;
 import com.nequi.ticketing.application.usecase.ProcessOrderService;
 import com.nequi.ticketing.infrastructure.config.AwsProperties;
@@ -14,8 +14,6 @@ import software.amazon.awssdk.services.sqs.SqsAsyncClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
-
-import java.util.List;
 
 /**
  * Polls the SQS purchase-orders queue and processes each message.
@@ -36,7 +34,7 @@ public class SqsOrderConsumer {
 
     private final SqsAsyncClient sqsClient;
     private final ProcessOrderService processOrderService;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper objectMapper;
     private final String queueUrl;
     private final int maxMessages;
     private final int waitTimeSeconds;
@@ -44,7 +42,7 @@ public class SqsOrderConsumer {
     public SqsOrderConsumer(
             SqsAsyncClient sqsClient,
             ProcessOrderService processOrderService,
-            ObjectMapper objectMapper,
+            JsonMapper objectMapper,
             AwsProperties awsProperties) {
         this.sqsClient = sqsClient;
         this.processOrderService = processOrderService;
@@ -54,10 +52,6 @@ public class SqsOrderConsumer {
         this.waitTimeSeconds = awsProperties.sqs().consumer().waitTimeSeconds();
     }
 
-    /**
-     * Polls SQS every ${ticketing.sqs.consumer.polling-interval} ms.
-     * Uses long polling to reduce costs and latency.
-     */
     @Scheduled(fixedDelayString = "${aws.sqs.consumer.polling-interval:5000}")
     public void poll() {
         ReceiveMessageRequest request = ReceiveMessageRequest.builder()
@@ -87,7 +81,6 @@ public class SqsOrderConsumer {
                 .doOnSuccess(v -> log.debug(
                         "Message processed and deleted: messageId={}", message.messageId()))
                 .onErrorResume(ex -> {
-                    // Do NOT delete — let visibility timeout expire for retry
                     log.error("Failed to process message: messageId={}, error={}",
                             message.messageId(), ex.getMessage());
                     return Mono.empty();

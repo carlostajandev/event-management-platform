@@ -1,7 +1,7 @@
 package com.nequi.ticketing.application.usecase;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 import com.nequi.ticketing.application.dto.ReservationResponse;
 import com.nequi.ticketing.application.dto.ReserveTicketsCommand;
 import com.nequi.ticketing.application.port.in.ReserveTicketsUseCase;
@@ -52,7 +52,7 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
     private final IdempotencyRepository idempotencyRepository;
     private final TicketStateMachine stateMachine;
     private final TicketingProperties ticketingProperties;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper objectMapper;
 
     public ReserveTicketsService(
             EventRepository eventRepository,
@@ -60,7 +60,7 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
             IdempotencyRepository idempotencyRepository,
             TicketStateMachine stateMachine,
             TicketingProperties ticketingProperties,
-            ObjectMapper objectMapper) {
+            JsonMapper objectMapper) {
         this.eventRepository = eventRepository;
         this.ticketRepository = ticketRepository;
         this.idempotencyRepository = idempotencyRepository;
@@ -77,13 +77,12 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
         log.debug("Reserving {} tickets for event={}, user={}, idempotencyKey={}",
                 command.quantity(), command.eventId(), command.userId(), command.idempotencyKey());
 
-        // Step 1: Check idempotency — return cached response if duplicate
         return idempotencyRepository.exists(idempotencyKey)
                 .flatMap(exists -> {
                     if (exists) {
                         log.info("Duplicate request detected for idempotencyKey={}", idempotencyKey);
                         return idempotencyRepository.findResponse(idempotencyKey)
-                                .flatMap(json -> deserializeResponse(json));
+                                .flatMap(this::deserializeResponse);
                     }
                     return processReservation(command, eventId, idempotencyKey);
                 });
@@ -94,36 +93,32 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
             EventId eventId,
             IdempotencyKey idempotencyKey) {
 
-        // Step 2: Validate event exists
         return eventRepository.findById(eventId)
                 .switchIfEmpty(Mono.error(new EventNotFoundException(eventId)))
-                .flatMap(event -> {
-                    // Step 3: Find available tickets
-                    return ticketRepository
-                            .findAvailableByEventId(eventId, command.quantity())
-                            .collectList()
-                            .flatMap(availableTickets -> {
-                                if (availableTickets.size() < command.quantity()) {
-                                    return Mono.error(new TicketNotAvailableException(
-                                            eventId, command.quantity()));
-                                }
+                .flatMap(event ->
+                        ticketRepository
+                                .findAvailableByEventId(eventId, command.quantity())
+                                .collectList()
+                                .flatMap(availableTickets -> {
+                                    if (availableTickets.size() < command.quantity()) {
+                                        return Mono.error(new TicketNotAvailableException(
+                                                eventId, command.quantity()));
+                                    }
 
-                                // Step 4: Reserve tickets with conditional writes
-                                OrderId orderId = OrderId.generate();
-                                int ttlMinutes = ticketingProperties.reservation().ttlMinutes();
+                                    OrderId orderId = OrderId.generate();
+                                    int ttlMinutes = ticketingProperties.reservation().ttlMinutes();
 
-                                return reserveTickets(
-                                        availableTickets.subList(0, command.quantity()),
-                                        command.userId(),
-                                        orderId.value(),
-                                        ttlMinutes)
-                                        .collectList()
-                                        .flatMap(reservedTickets ->
-                                                buildAndCacheResponse(
-                                                        reservedTickets, command, orderId,
-                                                        ttlMinutes, idempotencyKey));
-                            });
-                });
+                                    return reserveTickets(
+                                            availableTickets.subList(0, command.quantity()),
+                                            command.userId(),
+                                            orderId.value(),
+                                            ttlMinutes)
+                                            .collectList()
+                                            .flatMap(reservedTickets ->
+                                                    buildAndCacheResponse(
+                                                            reservedTickets, command, orderId,
+                                                            ttlMinutes, idempotencyKey));
+                                }));
     }
 
     private Flux<Ticket> reserveTickets(
@@ -134,7 +129,6 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
 
         return Flux.fromIterable(tickets)
                 .flatMap(ticket -> {
-                    // Validate state transition before attempting write
                     stateMachine.validateTransition(ticket.status(),
                             com.nequi.ticketing.domain.model.TicketStatus.RESERVED);
 
@@ -143,8 +137,7 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
                             .onErrorMap(RuntimeException.class, ex -> {
                                 log.warn("Concurrent modification on ticket={}, will retry",
                                         ticket.ticketId().value());
-                                return new TicketNotAvailableException(
-                                        ticket.eventId(), 1);
+                                return new TicketNotAvailableException(ticket.eventId(), 1);
                             });
                 });
     }
@@ -174,7 +167,6 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
                 "RESERVED"
         );
 
-        // Step 5: Cache response with idempotency key
         return serializeResponse(response)
                 .flatMap(json -> idempotencyRepository.save(
                         idempotencyKey, json,
@@ -187,7 +179,7 @@ public class ReserveTicketsService implements ReserveTicketsUseCase {
 
     private Mono<String> serializeResponse(ReservationResponse response) {
         return Mono.fromCallable(() -> objectMapper.writeValueAsString(response))
-                .onErrorMap(JsonProcessingException.class,
+                .onErrorMap(JacksonException.class,
                         ex -> new RuntimeException("Failed to serialize response", ex));
     }
 

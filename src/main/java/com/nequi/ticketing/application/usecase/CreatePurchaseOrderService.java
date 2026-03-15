@@ -1,7 +1,7 @@
 package com.nequi.ticketing.application.usecase;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 import com.nequi.ticketing.application.dto.CreatePurchaseOrderCommand;
 import com.nequi.ticketing.application.dto.OrderResponse;
 import com.nequi.ticketing.application.port.in.CreatePurchaseOrderUseCase;
@@ -37,12 +37,12 @@ public class CreatePurchaseOrderService implements CreatePurchaseOrderUseCase {
 
     private final OrderRepository orderRepository;
     private final MessagePublisher messagePublisher;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper objectMapper;
 
     public CreatePurchaseOrderService(
             OrderRepository orderRepository,
             MessagePublisher messagePublisher,
-            ObjectMapper objectMapper) {
+            JsonMapper objectMapper) {
         this.orderRepository = orderRepository;
         this.messagePublisher = messagePublisher;
         this.objectMapper = objectMapper;
@@ -80,7 +80,7 @@ public class CreatePurchaseOrderService implements CreatePurchaseOrderUseCase {
                                 order.totalAmount().amount().toPlainString(),
                                 order.totalAmount().currency()
                         )))
-                .onErrorMap(JsonProcessingException.class,
+                .onErrorMap(JacksonException.class,
                         ex -> new RuntimeException("Failed to serialize order message", ex))
                 .flatMap(json -> messagePublisher
                         .publishPurchaseOrder(json, order.eventId().value()))

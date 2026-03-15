@@ -1,7 +1,7 @@
 package com.nequi.ticketing.shared.error;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
@@ -16,14 +16,22 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 
+/**
+ * Global reactive error handler for all unhandled exceptions in WebFlux.
+ *
+ * <p>Order(-2) ensures this runs before Spring Boot's default error handler.
+ * Maps domain and infrastructure exceptions to appropriate HTTP status codes
+ * and returns a consistent {@link ErrorResponse} JSON body.
+ */
 @Component
 @Order(-2)
 public class GlobalErrorHandler implements WebExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalErrorHandler.class);
 
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .findAndRegisterModules();
+    private final ObjectMapper objectMapper = JsonMapper.builder()
+            .findAndAddModules()
+            .build();
 
     @Override
     public Mono<Void> handle(ServerWebExchange exchange, Throwable ex) {
@@ -36,7 +44,7 @@ public class GlobalErrorHandler implements WebExceptionHandler {
                     exchange.getRequest().getPath(),
                     ex.getMessage(), ex);
         } else {
-            log.warn("Client error [{} {}] → {}: {}",
+            log.warn("Client error [{} {}] -> {}: {}",
                     exchange.getRequest().getMethod(),
                     exchange.getRequest().getPath(),
                     status.value(),
@@ -57,7 +65,7 @@ public class GlobalErrorHandler implements WebExceptionHandler {
         byte[] bytes;
         try {
             bytes = objectMapper.writeValueAsBytes(errorResponse);
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
             bytes = "{\"error\":\"Internal error\"}".getBytes();
         }
 
@@ -76,6 +84,8 @@ public class GlobalErrorHandler implements WebExceptionHandler {
             case "InvalidTicketStateException"      -> HttpStatus.UNPROCESSABLE_ENTITY;
             case "DuplicateIdempotencyKeyException" -> HttpStatus.OK;
             case "MaxTicketsExceededException"      -> HttpStatus.BAD_REQUEST;
+            case "ValidationException"              -> HttpStatus.BAD_REQUEST;
+            case "ConstraintViolationException"     -> HttpStatus.BAD_REQUEST;
             default                                 -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }

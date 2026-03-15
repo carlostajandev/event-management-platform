@@ -61,3 +61,33 @@ application-prod.yml
 
 ### Node ###
 node_modules/
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+
+# Directorio de plugins y módulos descargados por terraform init
+.terraform/
+.terraform.lock.hcl
+
+# Estado local — NUNCA commitear, contiene ARNs, IPs, secrets
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Variables con valores sensibles — usar environments/*.tfvars solo para no-sensitivos
+# Los secrets van en Secrets Manager, no en archivos
+*.auto.tfvars
+terraform.tfvars
+
+# Outputs de plan (pueden contener valores sensibles)
+*.tfplan
+tfplan
+
+# Logs de crash
+crash.log
+crash.*.log
+
+# Override files — solo para desarrollo local
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

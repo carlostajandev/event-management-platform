@@ -13,8 +13,8 @@ availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
 # ECS — start with 2 tasks minimum for HA, scale to 20 on spikes
 app_image        = "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/emp-prod:latest"
 app_port         = 8080
-ecs_task_cpu     = 1024  # 1 vCPU in production
-ecs_task_memory  = 2048  # 2 GB in production
+ecs_task_cpu     = 1024 # 1 vCPU in production
+ecs_task_memory  = 2048 # 2 GB in production
 ecs_min_capacity = 2
 ecs_max_capacity = 20
 
@@ -24,7 +24,7 @@ dynamodb_point_in_time_recovery = true
 
 # SQS
 sqs_visibility_timeout_seconds = 30
-sqs_message_retention_seconds  = 345600  # 4 days
+sqs_message_retention_seconds  = 345600 # 4 days
 sqs_max_receive_count          = 3
 
 # Business rules

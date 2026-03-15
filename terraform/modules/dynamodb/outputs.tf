@@ -1,9 +1,9 @@
-output "events_table_name"      { value = aws_dynamodb_table.events.name }
-output "tickets_table_name"     { value = aws_dynamodb_table.tickets.name }
-output "orders_table_name"      { value = aws_dynamodb_table.orders.name }
+output "events_table_name" { value = aws_dynamodb_table.events.name }
+output "tickets_table_name" { value = aws_dynamodb_table.tickets.name }
+output "orders_table_name" { value = aws_dynamodb_table.orders.name }
 output "idempotency_table_name" { value = aws_dynamodb_table.idempotency.name }
-output "audit_table_name"       { value = aws_dynamodb_table.audit.name }
-output "shedlock_table_name"    { value = aws_dynamodb_table.shedlock.name }
+output "audit_table_name" { value = aws_dynamodb_table.audit.name }
+output "shedlock_table_name" { value = aws_dynamodb_table.shedlock.name }
 
 output "tables_arns" {
   value = [

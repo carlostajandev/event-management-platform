@@ -2,15 +2,13 @@
 
 # Event Management Platform
 
-**High-concurrency reactive ticketing platform — Nequi Technical Assessment**
+**Reactive ticketing platform built as a technical assessment for Nequi**
 
 [![CI/CD](https://github.com/carlostajandev/event-management-platform/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/carlostajandev/event-management-platform/actions)
-![Java](https://img.shields.io/badge/Java-21%20LTS-orange)
+![Java](https://img.shields.io/badge/Java-25-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.3-green)
-![Tests](https://img.shields.io/badge/tests-65%20passing-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-%3E90%25-brightgreen)
-![Architecture](https://img.shields.io/badge/architecture-Clean%20Architecture-blue)
-![IaC](https://img.shields.io/badge/IaC-Terraform-purple)
+![Tests](https://img.shields.io/badge/tests-65%2B%20passing-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-%E2%89%A580%25%20line%20%7C%20%E2%89%A570%25%20branch-brightgreen)
 
 </div>
 
@@ -18,13 +16,9 @@
 
 ## Overview
 
-A production-grade reactive ticketing platform built to handle concert ticket sales at scale — designed for high concurrency, financial consistency, and operational observability.
+A high-concurrency reactive ticketing platform designed to handle concert ticket sales at scale. Built with **Clean Architecture**, **Spring WebFlux** (non-blocking I/O), **DynamoDB** for persistence, and **SQS** for async order processing.
 
-**Core guarantees:**
-- **No overselling** — optimistic locking via DynamoDB conditional writes
-- **No duplicate charges** — idempotency keys with 24h TTL
-- **No data loss** — at-least-once SQS delivery with idempotent consumer
-- **No single point of failure** — multi-AZ ECS Fargate + DynamoDB Global Tables
+The system guarantees **no overselling** through optimistic locking with DynamoDB conditional writes, and **no duplicate charges** through idempotency keys with TTL-based expiry.
 
 ---
 
@@ -34,130 +28,106 @@ A production-grade reactive ticketing platform built to handle concert ticket sa
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
 - [Local Setup](#local-setup)
-- [Running with Docker](#running-with-docker)
+- [Running the Application](#running-the-application)
 - [Running Tests](#running-tests)
 - [API Reference](#api-reference)
 - [Key Design Decisions](#key-design-decisions)
 - [Project Structure](#project-structure)
-- [Infrastructure (Terraform)](#infrastructure-terraform)
-- [CI/CD Pipeline](#cicd-pipeline)
+- [Infrastructure](#infrastructure)
+- [CI/CD](#cicd)
 - [Documentation](#documentation)
 
 ---
 
 ## Architecture
 
-### Clean Architecture — Layer Dependency Rules
+The application follows **Clean Architecture** with strict dependency rules — inner layers never depend on outer layers.
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                    HTTP Layer (WebFlux / Netty)                       │
-│              Functional Routers + Handlers + Filters                  │
-├──────────────────────────────────────────────────────────────────────┤
-│                         INFRASTRUCTURE                                │
-│                                                                       │
-│  ┌──────────────┐  ┌─────────────────────┐  ┌─────────────────────┐ │
-│  │  Web Layer   │  │    Persistence      │  │     Messaging       │ │
-│  │  Handlers    │  │    DynamoDB         │  │  SQS Publisher      │ │
-│  │  Routers     │  │    Mappers          │  │  SQS Consumer       │ │
-│  │  Filters     │  │    Entities         │  │  Scheduler          │ │
-│  └──────┬───────┘  └──────────┬──────────┘  └──────────┬──────────┘ │
-└─────────┼────────────────────┼────────────────────────┼─────────────┘
-          │ port/in            │ port/out               │ port/out
-          ▼                    ▼                        ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                          APPLICATION                                  │
-│                                                                       │
-│  CreateEventService          ReserveTicketsService                    │
-│  GetEventService             ProcessOrderService                      │
-│  CreatePurchaseOrderService  ReleaseExpiredReservationsService        │
-│  QueryOrderStatusService     AuditService                             │
-│                                                                       │
-│  RULE: Use cases depend only on domain interfaces (ports/out)         │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ domain interfaces only
-                              ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                            DOMAIN                                     │
-│                  (zero external dependencies)                         │
-│                                                                       │
-│  Models:       Event, Ticket, Order, TicketStatus, OrderStatus        │
-│  Value Objects: EventId, TicketId, OrderId, Money, Venue              │
-│  Services:     TicketStateMachine                                     │
-│  Exceptions:   EventNotFound, TicketNotAvailable, OrderNotFound       │
-│  Repositories: Reactive interfaces (output ports)                     │
-└──────────────────────────────────────────────────────────────────────┘
-
-RULE: Arrows point inward only. Domain has NO imports from Spring, AWS, or any framework.
+┌──────────────────────────────────────────────────────────────────┐
+│                     HTTP (WebFlux / Netty)                        │
+│                  Functional Routers + Handlers                    │
+├──────────────────────────────────────────────────────────────────┤
+│                        INFRASTRUCTURE                             │
+│                                                                   │
+│  ┌─────────────┐  ┌──────────────────┐  ┌─────────────────────┐ │
+│  │  Web Layer  │  │   Persistence    │  │     Messaging       │ │
+│  │  Handlers   │  │   DynamoDB       │  │  SQS Publisher      │ │
+│  │  Routers    │  │   Mappers        │  │  SQS Consumer       │ │
+│  │  Filters    │  │   Entities       │  │  Scheduler          │ │
+│  └──────┬──────┘  └───────┬──────────┘  └──────────┬──────────┘ │
+│         │                 │                         │            │
+└─────────┼─────────────────┼─────────────────────────┼────────────┘
+          │ port/in         │ port/out                │ port/out
+┌─────────▼─────────────────▼─────────────────────────▼────────────┐
+│                        APPLICATION                                │
+│                                                                   │
+│   CreateEventService       ReserveTicketsService                  │
+│   GetEventService          ProcessOrderService                    │
+│   CreatePurchaseOrderService  ReleaseExpiredReservationsService   │
+│   QueryOrderStatusService  AuditService                           │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │ domain interfaces
+┌─────────────────────────────▼────────────────────────────────────┐
+│                          DOMAIN                                   │
+│                  (zero external dependencies)                     │
+│                                                                   │
+│   Models: Event, Ticket, Order, TicketStatus, OrderStatus         │
+│   Value Objects: EventId, TicketId, OrderId, Money, Venue         │
+│   Services: TicketStateMachine                                    │
+│   Exceptions: EventNotFound, TicketNotAvailable, OrderNotFound    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Ticket Reservation Flow
+### Purchase Flow
 
 ```
-Client          API (WebFlux)       Idempotency     Event       Ticket      SQS
-  │                  │                  Repo         Repo        Repo        │
-  │─POST /orders────►│                  │             │           │          │
-  │  X-Idem-Key      │                  │             │           │          │
-  │                  │─exists(key)?────►│             │           │          │
-  │                  │◄─false───────────│             │           │          │
-  │                  │─findById(evt)───────────────►  │           │          │
-  │                  │◄─Event──────────────────────   │           │          │
-  │                  │─findAvailable(N)────────────────────────►  │          │
-  │                  │◄─[tkt_1, tkt_2]─────────────────────────   │          │
-  │                  │─update(version=N+1)─────────────────────►  │          │
-  │                  │  ConditionExpression            │           │          │
-  │                  │◄─OK─────────────────────────────────────   │          │
-  │                  │─save(key, resp)─►│              │           │          │
-  │◄─201 RESERVED────│                  │              │           │          │
-  │                  │─publish(order)──────────────────────────────────────►│
-  │                  │                  │              │           │    async │
-  │                  │             SqsOrderConsumer polls every 5s           │
-  │                  │             RESERVED → PENDING_CONFIRMATION → SOLD    │
-```
-
-### Async Order Processing Flow
-
-```
-SqsConsumer    OrderRepo    TicketRepo    SQS
-    │               │            │          │
-    │─poll()────────────────────────────────►│
-    │◄─[message]────────────────────────────│
-    │─findById(ord)─►│            │          │
-    │◄─Order(PENDING)│            │          │
-    │─update(PROCESSING)►│        │          │
-    │─findById(tkt1)──────────────►│         │
-    │◄─Ticket(RESERVED)───────────│         │
-    │─update(PENDING_CONF)────────►│         │
-    │─update(SOLD)────────────────►│         │
-    │─update(CONFIRMED)──►│        │          │
-    │─deleteMessage()───────────────────────►│
+POST /api/v1/orders
+        │
+        ▼
+  Validate event ──────────────────── 404 EventNotFoundException
+        │
+        ▼
+  Check availability ──────────────── 409 TicketNotAvailableException
+        │
+        ▼
+  Reserve tickets (optimistic lock)
+  DynamoDB conditional write
+  version = expectedVersion
+        │
+        ▼
+  Cache idempotency key (TTL 24h)
+        │
+        ▼
+  Save order PENDING ──── 201 RESERVED (immediate response)
+        │
+        ▼
+  Publish to SQS (async)
+        │
+        ▼
+  SqsOrderConsumer polls every 5s
+        │
+        ▼
+  RESERVED → PENDING_CONFIRMATION → SOLD
+        │
+        ▼
+  Order CONFIRMED
 ```
 
 ### Ticket State Machine
 
 ```
-                    ┌────────────────────────────┐
-                    │                            │
-              ┌─────▼──────┐            ┌────────▼────────┐
-              │  AVAILABLE │            │  COMPLIMENTARY  │
-              └─────┬──────┘            │    (FINAL)      │
-                    │ reserve()         └─────────────────┘
-                    ▼
-              ┌─────────────┐
-              │  RESERVED   │──── expiresAt < now ──────► AVAILABLE
-              └─────┬───────┘         (scheduler)
-                    │ confirmPending()
-                    ▼
-        ┌───────────────────────┐
-        │  PENDING_CONFIRMATION │
-        └──────────┬────────────┘
-                   │
-           ┌───────┴────────┐
-           ▼                ▼
-     ┌──────────┐    ┌───────────┐
-     │   SOLD   │    │ AVAILABLE │
-     │  (FINAL) │    │ (failed)  │
-     └──────────┘    └───────────┘
+AVAILABLE ────────────────────────── COMPLIMENTARY (final)
+    │
+    ▼
+RESERVED ──── expiresAt < now ──────► AVAILABLE (released by scheduler)
+    │
+    ▼
+PENDING_CONFIRMATION
+    │
+    ├──── payment ok ───────────────► SOLD (final)
+    │
+    └──── payment failed ───────────► AVAILABLE
 ```
 
 ### DynamoDB Data Model
@@ -244,22 +214,36 @@ SqsConsumer    OrderRepo    TicketRepo    SQS
 
 ---
 
+## Tech Stack
+
+| Component | Technology | Decision |
+|---|---|---|
+| **Runtime** | Java 25 | Requisito explícito de la prueba. Virtual Threads (GA), Pattern Matching, Sealed Classes, Records — todos GA. |
+| **Framework** | Spring Boot 4.0.3 + WebFlux | Non-blocking I/O on Netty. Superior throughput vs MVC for DynamoDB/SQS intensive workloads. |
+| **Serialization** | Jackson 3 (`tools.jackson`) | SB4 migrated from Jackson 2. `JsonMapper` (concrete) injected directly — avoids Spring bean ambiguity with `ObjectMapper` (abstract). |
+| **Database** | DynamoDB | P99 predictable latency, native TTL for idempotency keys, auto-scaling, single-table design. |
+| **Messaging** | SQS | At-least-once delivery, DLQ, decouples reservation (sync) from payment processing (async). |
+| **Resilience** | Resilience4j | `@CircuitBreaker` on all DynamoDB repos and SQS publisher. `@Retry` on SQS publish. |
+| **Observability** | Micrometer + Prometheus | Metrics at `/actuator/prometheus`. CorrelationId propagated in MDC for all log statements. |
+| **Distributed Lock** | ShedLock + DynamoDB | Prevents N ECS instances from running the expiry scheduler N times simultaneously. |
+| **IaC** | Terraform | 5 modules: networking, dynamodb, sqs, ecs, iam — production-ready AWS deployment. |
+
+---
+
 ## Prerequisites
 
-| Tool | Version | Install |
+| Tool | Version | Notes |
 |---|---|---|
-| Java | 21 LTS | [Temurin](https://adoptium.net/) |
-| Docker | 20.10+ | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
+| Java | 21 LTS | [Temurin distribution](https://adoptium.net/) recommended |
+| Docker | 20.10+ | Required for DynamoDB Local + LocalStack |
 | Docker Compose | 2.0+ | Included with Docker Desktop |
-| Maven | 3.9+ | Or use `./mvnw` wrapper (included) |
-
-No AWS account required for local development.
+| Maven | 3.9+ | Or use the included `./mvnw` wrapper |
 
 ---
 
 ## Local Setup
 
-### 1. Clone
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/carlostajandev/event-management-platform.git
@@ -273,16 +257,14 @@ docker compose up -d
 ```
 
 This starts:
-- **DynamoDB Local 1.25.0** on `http://localhost:8000`
-- **LocalStack 3.6** (SQS) on `http://localhost:4566`
+- **DynamoDB Local** on `http://localhost:8000`
+- **LocalStack** (SQS) on `http://localhost:4566`
 
-Verify healthy:
+Verify everything is healthy:
 
 ```bash
 docker compose ps
-# NAME              STATUS
-# dynamodb-local    Up (healthy)
-# localstack        Up (healthy)
+# Both services should show "healthy"
 ```
 
 ### 3. Start the application
@@ -291,30 +273,24 @@ docker compose ps
 ./mvnw spring-boot:run
 ```
 
-DynamoDB tables are created automatically on startup:
+The application starts on `http://localhost:8080`. DynamoDB tables are created automatically on startup via `DynamoDbTableInitializer`.
 
 ```
-✓ emp-events
-✓ emp-tickets       (GSI: eventId-status-index)
-✓ emp-orders        (GSI: userId-index)
-✓ emp-idempotency   (TTL: expiresAt)
-✓ emp-audit         (PK: entityId, SK: timestamp)
-```
-
-### 4. Verify
-
-```bash
-curl http://localhost:8080/actuator/health
-# {"status":"UP"}
+Tables created:
+  emp-events
+  emp-tickets
+  emp-orders
+  emp-idempotency
+  emp-audit
 ```
 
 ### Environment configuration
 
-`src/main/resources/application-local.yml` — no real AWS credentials needed:
+Local settings live in `src/main/resources/application-local.yml`:
 
 ```yaml
 aws:
-  access-key-id: fakeMyKeyId
+  access-key-id: fakeMyKeyId          # No real credentials needed locally
   secret-access-key: fakeSecretAccessKey
   dynamodb:
     endpoint: http://127.0.0.1:8000
@@ -322,31 +298,36 @@ aws:
     endpoint: http://127.0.0.1:4566
 ```
 
+No real AWS credentials are needed for local development.
+
 ---
 
-## Running with Docker
+## Running the Application
+
+### With Maven (development)
 
 ```bash
-# Start full stack (infrastructure + application)
+./mvnw spring-boot:run
+```
+
+### With Docker Compose (full stack)
+
+```bash
+# Start infrastructure + application
 docker compose up -d
 
-# Stream application logs
+# View logs
 docker compose logs -f app
 
 # Stop everything
 docker compose down
-
-# Stop and remove volumes (clean slate)
-docker compose down -v
 ```
 
-### docker-compose.yml overview
+### Verify the application is running
 
-```yaml
-services:
-  dynamodb-local:   # DynamoDB Local 1.25.0 — port 8000
-  localstack:       # LocalStack 3.6 (SQS) — port 4566
-  app:              # Spring Boot 4 application — port 8080
+```bash
+curl http://localhost:8080/actuator/health
+# {"status":"UP"}
 ```
 
 ---
@@ -354,49 +335,63 @@ services:
 ## Running Tests
 
 ```bash
-# Full suite with JaCoCo coverage report
+# ── Unit tests only (no Docker required) ────────────────────────────────────
 ./mvnw test
 
-# Verify + coverage gate (fails if below threshold)
+# ── Unit + Integration tests (requires Docker for LocalStack) ────────────────
 ./mvnw verify
 
-# Specific test
+# ── Specific unit test ───────────────────────────────────────────────────────
 ./mvnw test -Dtest="TicketStateMachineTest"
 
-# Multiple tests
-./mvnw test -Dtest="TicketStateMachineTest,ReserveTicketsServiceTest,AuditServiceTest"
+# ── Specific integration test ────────────────────────────────────────────────
+./mvnw failsafe:integration-test -Dit.test="TicketReservationConcurrencyIT"
+
+# ── Coverage report (target/site/jacoco/index.html) ─────────────────────────
+./mvnw verify   # gate: ≥80% line coverage, ≥70% branch coverage
 ```
 
-### Test results — 65 tests, 0 failures
+> **Note:** Integration tests (`*IT.java`) require Docker running — they launch a LocalStack container with DynamoDB + SQS via Testcontainers.
+> Unit tests (`*Test.java`, `*Tests.java`) have zero infrastructure dependencies.
 
-| Test Suite | Tests | Coverage Focus |
+### Test Matrix
+
+**Unit tests — 65 passing, no Docker needed**
+
+| Test Suite | Tests | Description |
 |---|---|---|
-| `EventDomainTest` | 8 | Event model validation, business rules |
-| `TicketDomainTest` | 7 | Ticket model, state transitions |
-| `TicketStateMachineTest` | 17 | All valid/invalid state transitions |
-| `CreateEventServiceTest` | 3 | Event creation, validation |
-| `ReserveTicketsServiceTest` | 5 | Reservation, idempotency, concurrent modification |
-| `ProcessOrderServiceTest` | 4 | Order processing, idempotent consumer |
-| `ReleaseExpiredReservationsServiceTest` | 3 | Expiry scheduler logic |
+| `EventDomainTest` | 8 | Event model validations |
+| `TicketDomainTest` | 7 | Ticket model validations |
+| `TicketStateMachineTest` | 17 | All valid and invalid state transitions |
+| `CreateEventServiceTest` | 3 | Event creation use case |
+| `ReserveTicketsServiceTest` | 5 | Reservation, idempotency, compensation |
+| `ProcessOrderServiceTest` | 4 | Order processing, idempotency |
+| `ReleaseExpiredReservationsServiceTest` | 3 | Expiry scheduler |
 | `CreatePurchaseOrderServiceTest` | 2 | Order creation + SQS publish |
 | `AuditServiceTest` | 4 | Audit trail, failure absorption |
 | `CorrelationIdFilterTest` | 2 | HTTP filter, MDC propagation |
-| `EventHandlerTest` | 5 | HTTP layer, `@WebFluxTest` slice |
-| `OrderHandlerTest` | 4 | HTTP layer, idempotency header validation |
-| `EventManagementPlatformApplicationTests` | 1 | Full Spring context load |
+| `EventHandlerTest` | 5 | HTTP layer, WebFlux slice |
+| `OrderHandlerTest` | 4 | HTTP layer, WebFlux slice |
+| `EventManagementPlatformApplicationTests` | 1 | Spring context smoke test |
+
+**Integration tests — requires Docker + LocalStack**
+
+| Test Suite | Tests | Description |
+|---|---|---|
+| `TicketReservationConcurrencyIT` | 3 | 100 concurrent requests / 50 tickets — zero overselling proof |
+| `AvailabilityIT` | 5 | Real-time availability endpoint consistency |
+| `OrderProcessingIT` | 4 | Full async flow: reserve → SQS → CONFIRMED + SOLD |
 
 ---
 
 ## API Reference
 
-Base URL: `http://localhost:8080`
-
 ### Events
 
-#### `POST /api/v1/events` — Create Event
+#### Create Event
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/events \
+curl -X POST http://localhost:8080/api/v1/events \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Bad Bunny World Tour 2027",
@@ -408,67 +403,48 @@ curl -s -X POST http://localhost:8080/api/v1/events \
     "totalCapacity": 50000,
     "ticketPrice": 350000,
     "currency": "COP"
-  }' | jq '.'
+  }'
 ```
 
-**Response `201 Created`:**
+**Response 201:**
 ```json
 {
-  "eventId": "evt_a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "eventId": "evt_a1b2c3d4-...",
   "name": "Bad Bunny World Tour 2027",
   "status": "DRAFT",
-  "availableTickets": 50000,
-  "ticketPrice": 350000,
-  "currency": "COP"
+  "availableTickets": 50000
 }
 ```
 
----
-
-#### `GET /api/v1/events/{eventId}` — Get Event
+#### Get Event
 
 ```bash
-curl -s http://localhost:8080/api/v1/events/evt_a1b2c3d4 | jq '.'
+curl http://localhost:8080/api/v1/events/evt_a1b2c3d4
 ```
 
-**Response `404 Not Found`:**
-```json
-{
-  "status": 404,
-  "error": "Not Found",
-  "message": "Event not found: evt_unknown",
-  "path": "/api/v1/events/evt_unknown",
-  "timestamp": "2027-06-01T10:00:00Z"
-}
-```
-
----
-
-#### `GET /api/v1/events` — List Events (paginated)
+#### List Events (paginated)
 
 ```bash
-curl -s "http://localhost:8080/api/v1/events?page=0&size=10" | jq '.'
+curl "http://localhost:8080/api/v1/events?page=0&size=20"
 ```
 
-**Response `200 OK`:**
+**Response 200:**
 ```json
 {
-  "items": [{ "eventId": "...", "name": "...", "status": "DRAFT" }],
+  "items": [...],
   "page": 0,
-  "size": 10,
+  "size": 20,
   "hasMore": false
 }
 ```
 
----
-
-#### `GET /api/v1/events/{eventId}/availability` — Real-time Availability
+#### Get Availability
 
 ```bash
-curl -s http://localhost:8080/api/v1/events/evt_a1b2c3d4/availability | jq '.'
+curl http://localhost:8080/api/v1/events/evt_a1b2c3d4/availability
 ```
 
-**Response `200 OK`:**
+**Response 200:**
 ```json
 {
   "eventId": "evt_a1b2c3d4",
@@ -484,23 +460,22 @@ curl -s http://localhost:8080/api/v1/events/evt_a1b2c3d4/availability | jq '.'
 
 ### Orders
 
-#### `POST /api/v1/orders` — Reserve Tickets
+#### Reserve Tickets
 
-> **Required header:** `X-Idempotency-Key` — a client-generated UUID.
-> Retrying with the **same key** returns the cached response. No duplicate reservation is created.
+The `X-Idempotency-Key` header is **required**. Use a UUID generated client-side. Retrying with the same key returns the cached response without creating a duplicate reservation.
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/orders \
+curl -X POST http://localhost:8080/api/v1/orders \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: $(uuidgen)" \
   -d '{
     "eventId": "evt_a1b2c3d4",
     "userId": "usr_test_001",
     "quantity": 2
-  }' | jq '.'
+  }'
 ```
 
-**Response `201 Created`:**
+**Response 201:**
 ```json
 {
   "orderId": "ord_x1y2z3w4-...",
@@ -515,201 +490,207 @@ curl -s -X POST http://localhost:8080/api/v1/orders \
 }
 ```
 
-**Response `400 Bad Request`** — missing idempotency key:
-```json
-{
-  "status": 400,
-  "error": "Bad Request",
-  "message": "X-Idempotency-Key header is required"
-}
-```
-
-**Response `409 Conflict`** — no tickets available:
-```json
-{
-  "status": 409,
-  "error": "Conflict",
-  "message": "No available tickets for event: evt_a1b2c3d4"
-}
-```
-
----
-
-#### `GET /api/v1/orders/{orderId}` — Get Order Status
+**Idempotency test — same key returns cached response:**
 
 ```bash
-curl -s http://localhost:8080/api/v1/orders/ord_x1y2z3w4 | jq '.'
+KEY=$(uuidgen)
+
+# First call — creates reservation
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "X-Idempotency-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"eventId":"evt_a1b2c3d4","userId":"usr_001","quantity":1}'
+
+# Second call — returns same orderId, no duplicate created
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "X-Idempotency-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"eventId":"evt_a1b2c3d4","userId":"usr_001","quantity":1}'
 ```
 
-**Response `200 OK`:**
+#### Get Order Status
+
+```bash
+curl http://localhost:8080/api/v1/orders/ord_x1y2z3w4
+```
+
+**Response 200:**
 ```json
 {
   "orderId": "ord_x1y2z3w4-...",
+  "status": "CONFIRMED",
   "eventId": "evt_a1b2c3d4",
-  "userId": "usr_test_001",
   "quantity": 2,
   "totalAmount": 700000,
-  "currency": "COP",
-  "status": "CONFIRMED"
+  "currency": "COP"
 }
 ```
 
 ---
 
-### Actuator
+### Error Responses
 
-```bash
-# Health check
-curl -s http://localhost:8080/actuator/health | jq '.status'
+All errors follow a consistent structure:
 
-# Prometheus metrics
-curl -s http://localhost:8080/actuator/prometheus | grep http_server
-
-# Environment
-curl -s http://localhost:8080/actuator/env | jq '.activeProfiles'
+```json
+{
+  "status": 404,
+  "error": "Not Found",
+  "message": "Event not found: evt_unknown",
+  "path": "/api/v1/events/evt_unknown",
+  "timestamp": "2027-06-01T10:00:00Z"
+}
 ```
+
+| HTTP Status | Scenario |
+|---|---|
+| `400` | Missing `X-Idempotency-Key`, validation failure |
+| `404` | Event or order not found |
+| `409` | No tickets available |
+| `500` | Internal server error (never exposes stack traces) |
 
 ---
 
-### Error Reference
+### Actuator Endpoints
 
-| Status | Scenario |
-|---|---|
-| `400` | Missing `X-Idempotency-Key`, validation failure, invalid pagination params |
-| `404` | Event or order not found |
-| `409` | No tickets available for the requested quantity |
-| `500` | Internal error — never exposes stack traces, internal IPs, or table names |
+```bash
+# Health check
+curl http://localhost:8080/actuator/health
+
+# Prometheus metrics
+curl http://localhost:8080/actuator/prometheus
+
+# Environment info
+curl http://localhost:8080/actuator/env
+```
 
 ---
 
 ## Key Design Decisions
 
-### 1. Java 21 LTS — not Java 25 Early Access
+### 1. Java 25 — requisito explícito de la prueba técnica
 
-Java 25 is in Early Access. AWS SDK v2, Resilience4j, and Testcontainers have no certified support against it. In a ticketing system handling financial transactions under high concurrency, stability is non-negotiable. Java 21 LTS provides Virtual Threads (final release), Records, Pattern Matching, and Sealed Classes — all the modern language features needed, with a stable ecosystem.
+Java 25 es la versión exigida por la prueba. Todas las features utilizadas son GA (no preview):
 
-**In a technical review:** *"I chose Java 21 LTS deliberately. Java 25 is Early Access — the ecosystem including AWS SDK v2, Resilience4j, and Testcontainers does not have certified support yet. For a system processing financial transactions under high concurrency, stability is not negotiable."*
+- **Virtual Threads** — `spring.threads.virtual.enabled: true` + `Executors.newVirtualThreadPerTaskExecutor()` en tests de concurrencia. Los 100 threads concurrentes del test de overselling son Virtual Threads — sin overhead de OS threads.
+- **Pattern Matching en switch** — `GlobalErrorHandler.resolveStatus()` mapea excepciones tipadas a HTTP status codes sin casting explícito.
+- **Sealed interfaces** — `DomainEvent` con `permits TicketReserved, TicketSold, TicketReleased, OrderConfirmed, OrderFailed`. El compilador garantiza exhaustividad en switch expressions.
+- **Records con constructores compactos** — `Money`, `EventId`, `TicketId`, todos los value objects del dominio con validación en el constructor compacto.
 
-### 2. Jackson 3 — `JsonMapper` (concrete) over `ObjectMapper` (abstract)
+AWS SDK `2.20.26` está fijado en esa versión por compatibilidad con DynamoDB Local en desarrollo. En producción (AWS real) se puede usar la última versión.
 
-Spring Boot 4 migrated from Jackson 2 (`com.fasterxml.jackson`) to Jackson 3 (`tools.jackson`). The framework registers `JsonMapper` as a bean — not `ObjectMapper`. Injecting the concrete type directly is more explicit, type-safe, and eliminates the `NoUniqueBeanDefinitionException` that occurs when Spring resolves the abstract `ObjectMapper` and finds multiple candidates.
+### 2. `concatMap` (secuencial) sobre `flatMap` (concurrente) en reservas
 
-### 3. DynamoDB as single store
+Al reservar N tickets, `concatMap` permite compensación exacta si el ticket K falla. Con `flatMap` paralelo no es posible saber qué tickets completaron antes del fallo. El costo es latencia marginal para órdenes multi-ticket — inexistente para el caso más común (1 ticket). **Decisión: correctitud > velocidad en un sistema financiero.** Ver análisis completo en [`docs/TRADE_OFFS.md`](docs/TRADE_OFFS.md).
 
-One store for tickets, orders, idempotency keys, audit log, and ShedLock. DynamoDB provides: native TTL (idempotency keys expire automatically — no cleanup Lambda), sub-millisecond P99 latency, auto-scaling without manual partitioning, and PITR for 35-day point-in-time recovery of financial data.
+### 3. DynamoDB conditional writes — anti-overselling sin lock distribuido
 
-### 4. Optimistic locking — no distributed lock
+Cada actualización de ticket incluye `ConditionExpression: version = N`. Bajo 100 requests concurrentes compitiendo por el mismo ticket, exactamente uno gana. Los demás reciben `409 Conflict`. Verificado con el test `TicketReservationConcurrencyIT` con infraestructura real (LocalStack).
 
-Every ticket update includes `ConditionExpression: version = N`. If two concurrent requests compete for the same ticket, only one wins — DynamoDB rejects the second with `ConditionalCheckFailedException`, mapped to `409 Conflict`. No Redis, no pessimistic lock, no coordination overhead. Scales horizontally with no contention.
+### 4. Credenciales por `@Profile` — seguridad en producción
 
-### 5. SQS for async order processing
+`DynamoDbConfig` y `SqsConfig` usan `@Profile({"local","test"})` para `StaticCredentialsProvider` (credenciales ficticias apuntando a LocalStack) y `@Profile({"prod","staging"})` para `DefaultCredentialsProvider` (resuelve automáticamente el Task IAM Role de ECS — cero credenciales hardcodeadas). Ver [`docs/SECURITY.md`](docs/SECURITY.md).
 
-Decouples reservation (synchronous, sub-100ms) from payment processing (asynchronous, retryable). The consumer is fully idempotent — if the same order is processed twice, the second attempt detects the final state and skips silently. SQS retries automatically up to 3 times before moving to DLQ.
+### 5. SQS para procesamiento asíncrono de órdenes
 
-### 6. WebFlux over Spring MVC
+Desacopla la reserva (síncrona, respuesta inmediata HTTP 201) del procesamiento de pago (asíncrono, puede fallar y reintentar). El consumer es idempotente — detecta estado final `isFinal() == true` y hace no-op en reprocesamiento. Retry con backoff exponencial antes de dejar que SQS reencole al DLQ.
 
-Every DynamoDB or SQS call releases the thread immediately via Project Reactor. With identical hardware, WebFlux handles significantly more concurrent connections than thread-per-request MVC. Critical for ticket sale spikes where thousands of users hit `POST /orders` simultaneously.
+### 6. WebFlux + Virtual Threads
 
-### 7. ShedLock for distributed scheduler
+`WebFlux` con Netty libera el event loop en cada llamada I/O (DynamoDB, SQS). `Virtual Threads` eliminan el overhead de OS threads en el executor de completación del SDK. Combinados: alta concurrencia con footprint de memoria mínimo — crítico para picos de venta de entradas.
 
-`@Scheduled` without coordination would run the expiry job on every ECS instance simultaneously — releasing the same expired tickets multiple times, causing race conditions. ShedLock uses DynamoDB as a distributed lock (`lockAtMostFor=55s`, `lockAtLeastFor=30s`) — only one instance runs per cycle, even across rolling deployments.
+### 7. ShedLock para scheduler distribuido
+
+Con múltiples instancias ECS, un `@Scheduled` plano ejecuta el job de expiración en todas las instancias simultáneamente — liberando los mismos tickets N veces. ShedLock usa DynamoDB como lock distribuido, garantizando que solo una instancia por ciclo ejecute el job.
+
+### 8. Separación unit tests vs integration tests
+
+- `*Test.java` / `*Tests.java` — unit tests con Mockito, sin Docker, corren en `./mvnw test` (< 10s).
+- `*IT.java` — integration tests con Testcontainers/LocalStack, corren en `./mvnw verify` (requieren Docker).
+
+Esta separación permite que los PRs en CI validen la lógica de negocio rápidamente sin necesidad de Docker, y que el gate de integración completo corra en el pipeline de merge.
 
 ---
 
 ## Project Structure
 
 ```
-event-management-platform/
+src/main/java/com/nequi/ticketing/
 │
-├── src/main/java/com/nequi/ticketing/
-│   │
-│   ├── domain/                         # INNER — zero external dependencies
-│   │   ├── model/                      # Event, Ticket, Order, TicketStatus, OrderStatus
-│   │   ├── valueobject/                # EventId, TicketId, OrderId, Money, Venue
-│   │   ├── repository/                 # Reactive interfaces (output ports)
-│   │   ├── service/                    # TicketStateMachine
-│   │   └── exception/                  # EventNotFound, TicketNotAvailable, OrderNotFound
-│   │
-│   ├── application/                    # MIDDLE — depends on domain only
-│   │   ├── usecase/                    # One class per use case
-│   │   ├── port/in/                    # Input ports (driving interfaces)
-│   │   ├── port/out/                   # Output ports (driven interfaces)
-│   │   └── dto/                        # Request/Response DTOs
-│   │
-│   └── infrastructure/                 # OUTER — implements ports
-│       ├── config/                     # DynamoDbConfig, SqsConfig, ShedLockConfig, CorsConfig
-│       ├── persistence/dynamodb/       # Entities, Mappers, DynamoDB repositories
-│       ├── messaging/sqs/              # SqsMessagePublisher, SqsOrderConsumer
-│       ├── scheduler/                  # ExpiredReservationScheduler (@SchedulerLock)
-│       ├── web/
-│       │   ├── filter/                 # CorrelationIdFilter
-│       │   ├── handler/                # EventHandler, OrderHandler, AvailabilityHandler
-│       │   └── router/                 # EventRouter, OrderRouter (functional routing)
-│       └── shared/error/               # GlobalErrorHandler
+├── domain/                         # Zero external dependencies
+│   ├── model/                      # Event, Ticket, Order, TicketStatus, OrderStatus
+│   ├── valueobject/                # EventId, TicketId, OrderId, Money, Venue
+│   ├── repository/                 # Reactive repository interfaces (output ports)
+│   ├── service/                    # TicketStateMachine
+│   └── exception/                  # Domain exceptions
 │
-├── terraform/                          # Infrastructure as Code
-│   ├── modules/networking/             # VPC, subnets, NAT, VPC endpoints, security groups
-│   ├── modules/dynamodb/               # 6 tables, GSIs, TTL, PITR, encryption
-│   ├── modules/sqs/                    # Queue + DLQ + CloudWatch alarm
-│   ├── modules/ecs/                    # Fargate, ALB, auto-scaling
-│   ├── modules/iam/                    # Least-privilege execution + task roles
-│   └── environments/                  # prod.tfvars, dev.tfvars
+├── application/                    # Orchestrates domain
+│   ├── usecase/                    # CreateEvent, ReserveTickets, ProcessOrder...
+│   ├── port/
+│   │   ├── in/                     # Input ports (driving)
+│   │   └── out/                    # Output ports (driven)
+│   └── dto/                        # Request/Response DTOs
 │
-├── docs/
-│   ├── architecture/ARCHITECTURE.md   # Diagrams, sequences, state machine
-│   └── decisions/
-│       ├── SECURITY.md                # IAM, idempotency attacks, error hardening
-│       ├── TRADE_OFFS.md              # Limitations and production improvements
-│       └── CLOUD_NATIVE.md           # VPC design, costs, DR, observability
-│
-├── .github/workflows/ci-cd.yml        # GitHub Actions pipeline
-├── docker-compose.yml                 # DynamoDB Local + LocalStack
-├── api-requests.sh                    # Full curl test suite
-└── postman/                           # Postman collection with assertions
+└── infrastructure/                 # Implements ports
+    ├── config/                     # AWS, Jackson, ShedLock, CORS, TicketingProperties
+    ├── persistence/dynamodb/       # Entities, mappers, DynamoDB repositories
+    ├── messaging/sqs/              # SqsMessagePublisher, SqsOrderConsumer
+    ├── scheduler/                  # ExpiredReservationScheduler (@SchedulerLock)
+    ├── web/
+    │   ├── filter/                 # CorrelationIdFilter (MDC propagation)
+    │   ├── handler/                # EventHandler, OrderHandler, AvailabilityHandler
+    │   └── router/                 # Functional routing (EventRouter, OrderRouter)
+    └── shared/
+        └── error/                  # GlobalErrorHandler
 ```
 
 ---
 
-## Infrastructure (Terraform)
+## Infrastructure
 
-5 production-ready modules:
+Terraform modules for production AWS deployment:
 
-| Module | Resources | Key Decisions |
-|---|---|---|
-| `networking` | VPC, public/private subnets, NAT, VPC endpoints | Traffic to DynamoDB/SQS/ECR stays within AWS — no NAT cost, no public internet |
-| `dynamodb` | 6 tables, GSIs, TTL, PITR, encryption | PAY_PER_REQUEST handles spikes without capacity planning |
-| `sqs` | Queue + DLQ + CloudWatch alarm | Alert immediately on DLQ messages — order processing failures |
-| `ecs` | Fargate, ALB HTTPS, rolling deploy 50/200%, auto-scaling | Scale out in 60s, scale in in 300s. Health check on `/actuator/health` |
-| `iam` | Execution role + Task role | No wildcards in resources. DynamoDB access scoped to 6 tables only |
+```
+terraform/
+├── modules/
+│   ├── networking/     VPC multi-AZ, private subnets, NAT, VPC endpoints
+│   ├── dynamodb/       6 tables, GSIs, TTL, PITR, encryption at rest
+│   ├── sqs/            Queue + DLQ, long polling, KMS, CloudWatch alarm
+│   ├── ecs/            Fargate cluster, ALB HTTPS, rolling deploy, auto-scaling
+│   └── iam/            Least-privilege roles (execution vs task)
+└── environments/
+    ├── prod.tfvars
+    └── dev.tfvars
+```
 
 ```bash
 cd terraform
 terraform init
-terraform plan  -var-file=environments/prod.tfvars
+terraform plan -var-file=environments/prod.tfvars
 terraform apply -var-file=environments/prod.tfvars
 ```
 
-See [terraform/TERRAFORM.md](terraform/TERRAFORM.md) — decisions, commands, cost breakdown (~$102/month production).
+See [terraform/TERRAFORM.md](terraform/TERRAFORM.md) for architecture decisions and cost estimates (~$102/month production).
 
 ---
 
-## CI/CD Pipeline
+## CI/CD
 
-`.github/workflows/ci-cd.yml` — GitHub Actions:
+GitHub Actions pipeline — `.github/workflows/ci-cd.yml`:
 
 ```
-Pull Request → [Build & Test] + [Terraform Validate]
-Push main    → above + [Docker Build & Push] + [Terraform Plan]
-Tag v*       → above + [Deploy Production] ← requires manual approval
+Pull Request  →  Build & Test  +  Terraform Validate
+Push main     →  above  +  Docker Build & Push  +  Terraform Plan
+Tag v*        →  above  +  Deploy Production (manual approval required)
 ```
 
-| Job | Trigger | What it does |
+| Job | Trigger | Description |
 |---|---|---|
-| Build & Test | All events | `./mvnw verify` — 65 tests + JaCoCo gate |
-| Terraform Validate | All events | `terraform fmt -check` + `terraform validate` (no AWS credentials needed) |
-| Docker Build & Push | `main`, `v*` tags | JAR → Docker image → ECR push |
-| Terraform Plan | `main` | `terraform plan` against staging environment |
-| Deploy Production | `v*` tags | `terraform apply` + ECS wait-stable + smoke test on `/actuator/health` |
+| Build & Test | All | 65 tests + JaCoCo coverage gate |
+| Terraform Validate | All | `terraform fmt -check` + `terraform validate` |
+| Docker Build & Push | `main`, tags | Build JAR → Docker image → ECR |
+| Terraform Plan | `main` | `terraform plan` against staging |
+| Deploy Production | `v*` tags | `terraform apply` + ECS rolling update + smoke test |
 
 ---
 
@@ -717,10 +698,10 @@ Tag v*       → above + [Deploy Production] ← requires manual approval
 
 | Document | Description |
 |---|---|
-| [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) | Clean Architecture diagrams, sequence flows, state machine, DynamoDB model |
-| [docs/decisions/SECURITY.md](docs/decisions/SECURITY.md) | IAM least privilege, idempotency attack prevention, input validation, error hardening |
-| [docs/decisions/TRADE_OFFS.md](docs/decisions/TRADE_OFFS.md) | Known limitations, what would change in production, future improvements |
-| [docs/decisions/CLOUD_NATIVE.md](docs/decisions/CLOUD_NATIVE.md) | VPC design, cost estimates ($102/mo), observability three pillars, DR strategy |
-| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC decisions, Terraform commands, cost breakdown |
-| [api-requests.sh](api-requests.sh) | Full curl test suite — idempotency verification, all error scenarios |
-| [postman/](postman/) | Postman collection with automated assertions for all endpoints |
+| [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) | ASCII diagrams — Clean Architecture, sequence diagrams, state machine, DynamoDB model |
+| [docs/decisions/SECURITY.md](docs/decisions/SECURITY.md) | IAM least privilege, idempotency attacks, input validation, error response hardening |
+| [docs/decisions/TRADE_OFFS.md](docs/decisions/TRADE_OFFS.md) | Known limitations, production improvements, what would change with more time |
+| [docs/decisions/CLOUD_NATIVE.md](docs/decisions/CLOUD_NATIVE.md) | VPC design, cost estimates, observability three pillars, DR strategy |
+| [terraform/TERRAFORM.md](terraform/TERRAFORM.md) | IaC decisions, commands, cost breakdown |
+| [postman/](postman/) | Postman collection with automated assertions |
+| [api-requests.sh](api-requests.sh) | Full curl test suite with idempotency verification |

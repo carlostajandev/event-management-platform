@@ -33,6 +33,7 @@ public class DynamoDbTableInitializer {
         createOrdersTable();
         createIdempotencyTable();
         createAuditTable();
+        createShedlockTable();
         log.info("DynamoDB tables initialization complete.");
     }
 
@@ -100,6 +101,15 @@ public class DynamoDbTableInitializer {
                 .keySchema(
                         key("entityId",  KeyType.HASH),
                         key("timestamp", KeyType.RANGE))
+                .billingMode(BillingMode.PAY_PER_REQUEST)
+                .build());
+    }
+
+    private void createShedlockTable() {
+        createTableIfNotExists(CreateTableRequest.builder()
+                .tableName(awsProperties.dynamodb().tables().shedlock())
+                .attributeDefinitions(attr("_id", ScalarAttributeType.S))
+                .keySchema(key("_id", KeyType.HASH))
                 .billingMode(BillingMode.PAY_PER_REQUEST)
                 .build());
     }

@@ -19,7 +19,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
-import reactor.core.publisher.Flux;
+import com.nequi.ticketing.application.dto.PagedResponse;
+import java.util.List;
+import static org.mockito.ArgumentMatchers.anyInt;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
@@ -88,7 +90,9 @@ class EventHandlerTest {
     @Test
     @DisplayName("GET /api/v1/events should return 200")
     void shouldGetAllEvents() {
-        when(getEventUseCase.findAll()).thenReturn(Flux.just(validEventResponse()));
+        when(getEventUseCase.findPaged(anyInt(), anyInt()))
+                .thenReturn(Mono.just(new PagedResponse<>(
+                        List.of(validEventResponse()), 0, 20, false)));
 
         webTestClient.get().uri("/api/v1/events").exchange().expectStatus().isOk();
     }

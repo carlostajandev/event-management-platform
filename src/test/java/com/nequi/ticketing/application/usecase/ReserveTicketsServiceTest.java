@@ -1,6 +1,5 @@
 package com.nequi.ticketing.application.usecase;
 
-
 import com.nequi.ticketing.application.dto.ReservationResponse;
 import com.nequi.ticketing.application.dto.ReserveTicketsCommand;
 import com.nequi.ticketing.domain.exception.EventNotFoundException;
@@ -16,16 +15,18 @@ import com.nequi.ticketing.domain.valueobject.EventId;
 import com.nequi.ticketing.domain.valueobject.Money;
 import com.nequi.ticketing.domain.valueobject.TicketId;
 import com.nequi.ticketing.domain.valueobject.Venue;
-import com.nequi.ticketing.infrastructure.config.TicketingProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.stubbing.Answer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -55,21 +56,14 @@ class ReserveTicketsServiceTest {
     @BeforeEach
     void setUp() {
         TicketStateMachine stateMachine = new TicketStateMachine();
-        TicketingProperties properties = new TicketingProperties(
-                new TicketingProperties.ReservationProperties(10, 60000),
-                new TicketingProperties.IdempotencyProperties(24),
-                new TicketingProperties.PaginationProperties(20, 100),
-                new TicketingProperties.CorsProperties(java.util.List.of("http://localhost:3000")),
-                10
-        );
-        tools.jackson.databind.json.JsonMapper objectMapper =
+        tools.jackson.databind.ObjectMapper objectMapper =
                 tools.jackson.databind.json.JsonMapper.builder()
                         .findAndAddModules()
                         .build();
 
         service = new ReserveTicketsService(
                 eventRepository, ticketRepository, idempotencyRepository,
-                stateMachine, properties, objectMapper);
+                stateMachine, 10, 24, objectMapper);
     }
 
     @Test
@@ -77,18 +71,28 @@ class ReserveTicketsServiceTest {
     void shouldReserveTicketsSuccessfully() {
         ReserveTicketsCommand command = validCommand(2);
         Event event = validEvent();
-        List<Ticket> availableTickets = List.of(
-                availableTicket(command.eventId()),
-                availableTicket(command.eventId())
-        );
+        Ticket ticket1 = availableTicket(command.eventId());
+        Ticket ticket2 = availableTicket(command.eventId());
 
-        when(idempotencyRepository.exists(any())).thenReturn(Mono.just(false));
-        when(eventRepository.findById(any())).thenReturn(Mono.just(event));
-        when(ticketRepository.findAvailableByEventId(any(), eq(2)))
-                .thenReturn(Flux.fromIterable(availableTickets));
-        when(ticketRepository.update(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        // New flow: claim key first (save returns empty = claimed successfully)
         when(idempotencyRepository.save(any(), anyString(), anyInt()))
                 .thenReturn(Mono.empty());
+        when(idempotencyRepository.updateResponse(any(), anyString()))
+                .thenReturn(Mono.empty());
+        when(eventRepository.findById(any())).thenReturn(Mono.just(event));
+        when(ticketRepository.findAvailableByEventId(eq(EventId.of("evt_test123")), eq(1)))
+                .thenAnswer(new Answer<Flux<Ticket>>() {
+                    private int callCount = 0;
+
+                    @Override
+                    public Flux<Ticket> answer(InvocationOnMock invocation) {
+                        callCount++;
+                        if (callCount == 1) return Flux.just(ticket1);
+                        if (callCount == 2) return Flux.just(ticket2);
+                        return Flux.error(new RuntimeException("Unexpected call #" + callCount));
+                    }
+                });
+        when(ticketRepository.update(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
         StepVerifier.create(service.execute(command))
                 .assertNext(response -> {
@@ -112,7 +116,10 @@ class ReserveTicketsServiceTest {
                 List.of("tkt_123"), Instant.now(), Instant.now().plusSeconds(600), "RESERVED");
         String cachedJson = mapper.writeValueAsString(cached);
 
-        when(idempotencyRepository.exists(any())).thenReturn(Mono.just(true));
+        // Claim fails with ConditionalCheckFailed = another request already owns this key
+        when(idempotencyRepository.save(any(), anyString(), anyInt()))
+                .thenReturn(Mono.error(ConditionalCheckFailedException.builder()
+                        .message("The conditional request failed").build()));
         when(idempotencyRepository.findResponse(any())).thenReturn(Mono.just(cachedJson));
 
         StepVerifier.create(service.execute(command))
@@ -133,13 +140,12 @@ class ReserveTicketsServiceTest {
         ReserveTicketsCommand command = validCommand(5);
         Event event = validEvent();
 
-        when(idempotencyRepository.exists(any())).thenReturn(Mono.just(false));
+        // Claim succeeds — this request owns the key
+        when(idempotencyRepository.save(any(), anyString(), anyInt()))
+                .thenReturn(Mono.empty());
         when(eventRepository.findById(any())).thenReturn(Mono.just(event));
-        // Only 2 available, requested 5
-        when(ticketRepository.findAvailableByEventId(any(), eq(5)))
-                .thenReturn(Flux.fromIterable(List.of(
-                        availableTicket(command.eventId()),
-                        availableTicket(command.eventId()))));
+        when(ticketRepository.findAvailableByEventId(any(), eq(1)))
+                .thenReturn(Flux.empty()); // no tickets available
 
         StepVerifier.create(service.execute(command))
                 .expectError(TicketNotAvailableException.class)
@@ -151,7 +157,9 @@ class ReserveTicketsServiceTest {
     void shouldFailForUnknownEvent() {
         ReserveTicketsCommand command = validCommand(1);
 
-        when(idempotencyRepository.exists(any())).thenReturn(Mono.just(false));
+        // Claim succeeds — then event lookup fails
+        when(idempotencyRepository.save(any(), anyString(), anyInt()))
+                .thenReturn(Mono.empty());
         when(eventRepository.findById(any())).thenReturn(Mono.empty());
 
         StepVerifier.create(service.execute(command))
@@ -166,13 +174,16 @@ class ReserveTicketsServiceTest {
         Event event = validEvent();
         Ticket available = availableTicket(command.eventId());
 
-        when(idempotencyRepository.exists(any())).thenReturn(Mono.just(false));
+        // Claim succeeds — this request owns the key
+        when(idempotencyRepository.save(any(), anyString(), anyInt()))
+                .thenReturn(Mono.empty());
         when(eventRepository.findById(any())).thenReturn(Mono.just(event));
         when(ticketRepository.findAvailableByEventId(any(), eq(1)))
                 .thenReturn(Flux.just(available));
-        // Simulate concurrent modification
+        // Every update attempt fails with concurrent modification
         when(ticketRepository.update(any()))
-                .thenReturn(Mono.error(new RuntimeException("Concurrent modification")));
+                .thenReturn(Mono.error(
+                        new RuntimeException("Concurrent modification on ticket: tkt_test")));
 
         StepVerifier.create(service.execute(command))
                 .expectError(TicketNotAvailableException.class)

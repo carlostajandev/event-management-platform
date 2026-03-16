@@ -5,6 +5,7 @@ import net.javacrumbs.shedlock.provider.dynamodb2.DynamoDBLockProvider;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
@@ -23,6 +24,7 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
  * Schema: PK={@code _id} (String) — created manually or via DynamoDB init.
  */
 @Configuration
+@Profile("!test")
 @EnableScheduling
 @EnableSchedulerLock(defaultLockAtMostFor = "PT55S")
 public class ShedLockConfig {

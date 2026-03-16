@@ -13,6 +13,9 @@ Production:
 tickets with expiresAt → DynamoDB TTL → Stream → Lambda → release ticket
 ```
 
+**Why not done here:**
+For a technical assessment with controlled data volume, the scan approach demonstrates the concept correctly. GSI option would be the first production improvement.
+
 ---
 
 ### 2. SQS Standard vs FIFO
@@ -52,7 +55,8 @@ tickets with expiresAt → DynamoDB TTL → Stream → Lambda → release ticket
 
 **For a national Colombian ticketing system**: DynamoDB Global Tables with replication to sa-east-1 (São Paulo, the closest region) + Route 53 latency-based routing.
 
----
+**Production improvement:**
+Implement fallback responses at the handler level:
 
 ## Known Limitations of This Implementation
 

@@ -130,6 +130,88 @@ PENDING_CONFIRMATION
     └──── payment failed ───────────► AVAILABLE
 ```
 
+### DynamoDB Data Model
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Table: emp-tickets                                          │
+│  PK: ticketId (String)                                       │
+│                                                             │
+│  GSI: eventId-status-index                                  │
+│  PK: eventId  |  SK: status                                 │
+│  → Query "all AVAILABLE tickets for event X"                │
+│     without full table scan                                 │
+├─────────────────────────────────────────────────────────────┤
+│  Table: emp-idempotency                                     │
+│  PK: idempotencyKey (String)                                │
+│  TTL: expiresAt (Unix epoch) — DynamoDB deletes expired     │
+│       keys automatically. No cleanup job needed.            │
+├─────────────────────────────────────────────────────────────┤
+│  Table: emp-audit                                           │
+│  PK: entityId (String)  |  SK: timestamp (String)           │
+│  → All changes for an entity in chronological order         │
+├─────────────────────────────────────────────────────────────┤
+│  Table: emp-shedlock                                        │
+│  PK: _id (String)                                           │
+│  → Distributed scheduler lock across ECS instances          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Production AWS Architecture
+
+```
+                        ┌─────────────────────────────────────┐
+                        │         Route 53 (DNS)               │
+                        │   api.ticketing.nequi.com            │
+                        └──────────────────┬──────────────────┘
+                                           │
+                        ┌──────────────────▼──────────────────┐
+                        │    CloudFront + WAF                  │
+                        │  Rate limiting · OWASP rules         │
+                        └──────────────────┬──────────────────┘
+                                           │
+                        ┌──────────────────▼──────────────────┐
+                        │  Application Load Balancer (ALB)    │
+                        │  TLS termination · ACM certificate  │
+                        │  HTTP → HTTPS redirect              │
+                        └──────────┬──────────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                    │
+    ┌─────────▼──────┐   ┌─────────▼──────┐   ┌────────▼───────┐
+    │  ECS Fargate   │   │  ECS Fargate   │   │  ECS Fargate   │
+    │  Task (AZ-1a)  │   │  Task (AZ-1b)  │   │  Task (AZ-1c)  │
+    │  Java 21 App   │   │  Java 21 App   │   │  Java 21 App   │
+    └────────────────┘   └────────────────┘   └────────────────┘
+              │                    │                    │
+              └────────────────────┼────────────────────┘
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+         ┌──────────▼──────────┐     ┌────────────▼─────────┐
+         │  DynamoDB           │     │  SQS                 │
+         │  (6 tables)         │     │  purchase-orders     │
+         │  PITR enabled       │     │  + DLQ               │
+         │  Encryption at rest │     │  KMS encrypted       │
+         └─────────────────────┘     └──────────────────────┘
+```
+
+---
+
+## Tech Stack
+
+| Component | Technology | Rationale |
+|---|---|---|
+| **Runtime** | Java 21 LTS | Chosen over Java 25 EA — AWS SDK v2, Resilience4j, and Testcontainers have certified support. Virtual Threads in final release. Java 25 is Early Access — not suitable for financial production systems. |
+| **Framework** | Spring Boot 4.0.3 + WebFlux | Non-blocking I/O on Netty. Every DynamoDB/SQS call releases the thread immediately — handles far more concurrent connections than MVC with identical hardware. |
+| **Serialization** | Jackson 3 (`tools.jackson`) | Spring Boot 4 migrated from Jackson 2. `JsonMapper` (concrete) injected directly — eliminates Spring bean ambiguity when resolving `ObjectMapper` (abstract). |
+| **Database** | DynamoDB (PAY_PER_REQUEST) | P99 predictable latency. Native TTL for idempotency key expiry (no cleanup job). GSI for efficient ticket queries. PITR for financial data recovery. |
+| **Messaging** | SQS Standard | At-least-once delivery. DLQ after 3 failures. Long polling (20s) reduces empty receives by ~95%. Decouples reservation (sync, fast) from payment processing (async, retryable). |
+| **Resilience** | Resilience4j 2.3.0 | `@CircuitBreaker` on all DynamoDB repositories and SQS publisher. `@Retry` with exponential backoff on SQS publish. Prevents cascade failures. |
+| **Observability** | Micrometer + Prometheus | Metrics at `/actuator/prometheus`. `X-Correlation-Id` propagated through `CorrelationIdFilter` into MDC — every log statement includes the trace ID. |
+| **Distributed Lock** | ShedLock 6.0.1 + DynamoDB | Prevents N ECS instances from running the reservation expiry scheduler N times. `lockAtMostFor=55s` releases lock even on instance crash. |
+| **IaC** | Terraform 1.7+ | 5 modules: `networking`, `dynamodb`, `sqs`, `ecs`, `iam`. IAM least privilege — execution role and task role separated. |
+
 ---
 
 ## Tech Stack

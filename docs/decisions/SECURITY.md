@@ -5,9 +5,14 @@
 ### Local (development)
 Local credentials are fake and live in `application-local.yml`:
 ```yaml
+# application-local.yml — safe to commit (fake values)
 aws:
   access-key-id: fakeMyKeyId
   secret-access-key: fakeSecretAccessKey
+  dynamodb:
+    endpoint: http://127.0.0.1:8000
+  sqs:
+    endpoint: http://127.0.0.1:4566
 ```
 Real credentials are never committed. `.gitignore` excludes `application-prod.yml` and `.env` files.
 
@@ -20,30 +25,14 @@ ECS Task → Task IAM Role → IAM Policy (least privilege)
 The IAM policy applies the principle of least privilege:
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:Query",
-        "dynamodb:Scan"
-      ],
-      "Resource": [
-        "arn:aws:dynamodb:us-east-1:ACCOUNT:table/emp-*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "sqs:SendMessage",
-        "sqs:ReceiveMessage",
-        "sqs:DeleteMessage"
-      ],
-      "Resource": "arn:aws:sqs:us-east-1:ACCOUNT:emp-purchase-orders"
-    }
-  ]
+  "Actions": [
+    "ecr:GetAuthorizationToken",
+    "ecr:BatchGetImage",
+    "logs:CreateLogGroup",
+    "logs:PutLogEvents",
+    "secretsmanager:GetSecretValue"
+  ],
+  "Resources": "scoped to account prefix"
 }
 ```
 

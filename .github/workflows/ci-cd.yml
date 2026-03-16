@@ -27,7 +27,7 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: emp
-  JAVA_VERSION: '21'
+  JAVA_VERSION: '25'
 
 jobs:
 

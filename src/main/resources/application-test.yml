@@ -1,60 +1,60 @@
 # ══════════════════════════════════════════════════════════════
-#  Perfil TEST
-#  Se activa automáticamente con @ActiveProfiles("test")
-#  Los endpoints reales de AWS los provee Testcontainers/LocalStack.
-#  Nunca apunta a infra real — los valores son sobrescritos en cada
-#  @SpringBootTest por las propiedades del contenedor levantado.
+#  application-test.yml — Profile active in integration tests
+#
+#  IMPORTANT: these values are deliberately reduced so that
+#  expiration tests can run in under 5 seconds.
+#  NEVER use these values in production.
 # ══════════════════════════════════════════════════════════════
-
 spring:
-  config:
-    activate:
-      on-profile: test
-
-  # Desactiva la inicialización de beans AWS en contexto de test puro
-  # (los tests de integración con Testcontainers lo sobreescriben)
+  # Disables the SQS consumer in tests to avoid polling loops.
+  # Tests that need SQS control it manually.
   autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration
+    exclude: []
 
 aws:
-  access-key-id: test
-  secret-access-key: test
   region: us-east-1
   dynamodb:
-    endpoint: http://localhost:8000   # Sobrescrito por Testcontainers
+    # Will be overridden by TestcontainersConfiguration @Primary bean
+    endpoint: http://localhost:8080
     tables:
-      events:      test-events
-      tickets:     test-tickets
-      orders:      test-orders
-      idempotency: test-idempotency
-      audit:       test-audit
+      events: emp-test-events
+      tickets: emp-test-tickets
+      orders: emp-test-orders
+      idempotency: emp-test-idempotency
+      audit: emp-test-audit
+      shedlock: emp-test-shedlock
   sqs:
-    endpoint: http://localhost:4566   # Sobrescrito por Testcontainers
+    # Will be overridden by TestcontainersConfiguration @Primary bean
+    endpoint: http://localhost:4566
     queues:
-      purchase-orders:     test-purchase-orders
-      purchase-orders-dlq: test-purchase-orders-dlq
+      purchase-orders:     emp-test-purchase-orders
+      purchase-orders-dlq: emp-test-purchase-orders-dlq
     consumer:
-      polling-interval: 1000          # Más rápido en tests
+      max-messages:       5
+      visibility-timeout: 10
+      wait-time-seconds:  1
+      polling-interval:   500
 
 ticketing:
   reservation:
-    ttl-minutes: 1                    # TTL corto para tests de expiración
-    expiry-job-interval: 500
+    # TTL of 1 minute. In expiration tests, tickets are inserted with
+    # expiresAt in the past directly into DynamoDB, so the test does not
+    # need to wait for the real TTL. In production this value is 10 minutes.
+    ttl-minutes: 1
+    # Expiration job runs every 200ms — responds quickly in expiration tests
+    expiry-job-interval: 200
   idempotency:
     ttl-hours: 1
   max-tickets-per-order: 10
+  pagination:
+    default-page-size: 20
+    max-page-size: 100
 
-# Desactiva rate limiting en tests para no interferir con carga paralela
-resilience4j:
-  ratelimiter:
-    instances:
-      purchase-api:
-        limit-for-period: 10000
-        limit-refresh-period: 1s
-        timeout-duration: 0s
-
+# Reduced logging in tests for cleaner output
 logging:
   level:
-    com.nequi.ticketing: DEBUG
+    root: WARN
+    com.nequi.ticketing: INFO
     software.amazon.awssdk: WARN
+    org.testcontainers: INFO
+    reactor.netty: WARN

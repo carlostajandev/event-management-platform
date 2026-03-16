@@ -76,17 +76,11 @@ public class EventHandler {
                     .bodyValue("Invalid pagination: page >= 0, 0 < size <= 100");
         }
 
-        long offset = (long) page * size;
-
-        return getEventUseCase.findAll()
-                .skip(offset)
-                .take(size)
-                .collectList()
-                .flatMap(items -> ServerResponse
+        return getEventUseCase.findPaged(page, size)
+                .flatMap(pagedResponse -> ServerResponse
                         .ok()
                         .contentType(MediaType.APPLICATION_JSON)
-                        .bodyValue(new com.nequi.ticketing.application.dto.PagedResponse<>(
-                                items, page, size, items.size() == size)));
+                        .bodyValue(pagedResponse));
     }
 
     private <T> Mono<T> validate(T body) {

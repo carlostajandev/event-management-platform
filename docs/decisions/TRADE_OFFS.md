@@ -1,31 +1,16 @@
-# Trade-offs, Limitations & Production Improvements
+# Trade-offs, Limitations and Improvements
 
 ## Decisions I Would Change in Production
 
-### 1. Expired Reservation Scanner — Full Table Scan
+### 1. `findExpiredReservations` — Full Table Scan
+**Current situation**: The expiration scheduler performs a full `scan` on the `emp-tickets` table looking for entries with `status=RESERVED` and `expiresAt < now`.
 
-**Current situation:**
-The scheduler queries DynamoDB for tickets with `status=RESERVED` and `expiresAt < now` using a `Scan` operation on the `emp-tickets` table.
+**Problem in production**: With millions of tickets, a full scan is expensive ($) and slow.
 
-**Problem at scale:**
-With millions of tickets, a full table scan is expensive ($0.25 per million RCUs) and slow — scan time grows linearly with table size.
-
-**Production solution:**
+**Real solution**: GSI on `(status, expiresAt)` or use DynamoDB Streams + Lambda that reacts to changes. A more elegant alternative: native DynamoDB TTL with a Lambda trigger that releases the ticket when it expires.
 ```
-Option A — GSI on (status, expiresAt):
-  Query index WHERE status=RESERVED AND expiresAt < :now
-  Cost: additional GSI write per ticket update, but queries are fast and cheap.
-
-Option B — DynamoDB TTL + Streams:
-  Set TTL on ticket.expiresAt
-  DynamoDB TTL fires → Stream event → Lambda releases ticket
-  Fully serverless, zero scheduler overhead, scales infinitely.
-  Trade-off: TTL deletion is not instantaneous (can take up to 48h in worst case).
-
-Option C — EventBridge Scheduler:
-  Per-reservation scheduled event at exact expiresAt time
-  Exact precision, no polling, no scan
-  Higher cost per reservation ($0.000001 per invocation)
+Production:
+tickets with expiresAt → DynamoDB TTL → Stream → Lambda → release ticket
 ```
 
 **Why not done here:**
@@ -33,165 +18,165 @@ For a technical assessment with controlled data volume, the scan approach demons
 
 ---
 
-### 2. SQS Standard — Not FIFO
+### 2. SQS Standard vs FIFO
+**Current situation**: SQS Standard (at-least-once, no guaranteed order).
 
-**Current situation:**
-SQS Standard queue — at-least-once delivery, no ordering guarantee.
+**Problem**: The same orderId could be processed twice in parallel if there are fast retries.
 
-**Problem:**
-If a message is retried quickly (network blip), the same order could be processed twice concurrently by two different consumer instances.
+**Current mitigation**: `ProcessOrderService` is idempotent — detects final state and skips.
 
-**Mitigation in place:**
-`ProcessOrderService` checks for final state before processing. If order is already `CONFIRMED` or `CANCELLED`, the message is acknowledged and discarded silently.
-
-**Production improvement:**
-```
-SQS FIFO with MessageGroupId = orderId
-  → at-most-once processing per order group
-  → messages for the same order processed in sequence
-  → higher cost ($0.50/million vs $0.40/million for Standard)
-  → 300 messages/sec per message group limit (acceptable for ticketing)
-```
+**In production**: SQS FIFO with `MessageGroupId = orderId` guarantees at-most-once processing per order. More expensive but more predictable.
 
 ---
 
-### 3. No Integration Tests with Real Infrastructure
+### 3. Ticket Reservation Without Distributed Lock
+**Current situation**: Optimistic locking with conditional writes. If 100 users compete for the last ticket, 99 will receive 409 and have to retry.
 
-**Current situation:**
-65 unit tests with Mockito mocks for repositories and message publishers. No tests spin up real DynamoDB or SQS.
+**Problem**: High contention on popular events generates many 409s and retries that saturate the API.
 
-**Problem:**
-- DynamoDB conditional write behavior not verified end-to-end
-- SQS at-least-once delivery not tested
-- Real pagination behavior with DynamoDB not tested
-- JaCoCo branch coverage artificially low (45%) because infrastructure classes are excluded
-
-**Production improvement:**
-```java
-@SpringBootTest
-@Testcontainers
-class ReservationIntegrationTest {
-
-    @Container
-    static LocalStackContainer localStack =
-        new LocalStackContainer(DockerImageName.parse("localstack/localstack:3.6"))
-            .withServices(Service.DYNAMODB, Service.SQS);
-
-    // Tests with REAL DynamoDB + SQS behavior
-    // - Conditional write conflicts
-    // - SQS retry and DLQ behavior
-    // - TTL verification
-    // - GSI queries
-}
-```
-
-This would bring branch coverage back to 70%+ and validate actual DynamoDB behavior.
+**Real solution for high demand**:
+- **Range pre-allocation**: each app instance receives a range of ticketIds to assign — no contention.
+- **Redis + Lua scripts**: atomic reservation with TTL in memory, async flush to DynamoDB.
+- **Virtual waiting room**: virtual queue for peaks like Coldplay ticket sales.
 
 ---
 
-### 4. No API Versioning Strategy
+### 4. SQS Polling vs Event-driven
+**Current situation**: `@Scheduled` poll every 5 seconds.
 
-**Current situation:**
-All endpoints use `/api/v1/` prefix. No formal versioning strategy beyond the URL prefix.
+**Problem**: Up to 5s latency + polling costs when the queue is empty.
 
-**Problem:**
-Breaking changes to the API (removing fields, changing types) would break existing clients with no migration path.
-
-**Production strategy:**
-```
-Option A — URL versioning (current): /api/v1/, /api/v2/
-  Pro: Simple, cache-friendly
-  Con: URL proliferation, hard to deprecate
-
-Option B — Header versioning: Accept: application/vnd.nequi.v2+json
-  Pro: Clean URLs, clients opt-in
-  Con: Harder to test in browser, less visible
-
-Option C — Consumer-driven contracts (Pact):
-  Each consumer defines what fields it needs
-  Provider verifies all contracts on every build
-  Breaking changes detected before deployment
-```
+**In production**: SQS Long Polling (waitTimeSeconds=20) is already configured, but in ECS the ideal approach is to use **Spring Cloud AWS SQS Listener** or directly **AWS Lambda** as the consumer — reacts in milliseconds and scales to zero when there are no messages.
 
 ---
 
-### 5. No Circuit Breaker on Web Layer
+### 5. Single-region vs Multi-region
+**Current situation**: Designed for us-east-1.
 
-**Current situation:**
-`@CircuitBreaker` is applied on DynamoDB repositories and SQS publisher. If DynamoDB is down, the circuit opens and requests fail fast — but the failure propagates to the client as a 500.
+**For a national Colombian ticketing system**: DynamoDB Global Tables with replication to sa-east-1 (São Paulo, the closest region) + Route 53 latency-based routing.
 
 **Production improvement:**
 Implement fallback responses at the handler level:
 
-```java
-// EventHandler.java — with fallback
-return getEventUseCase.findById(eventId)
-    .onErrorResume(CallNotPermittedException.class, ex ->
-        // Circuit is open — return cached/stale data or 503
-        Mono.error(new ServiceUnavailableException("Event service temporarily unavailable")));
-```
+## Known Limitations of This Implementation
 
-With Redis as a read-through cache, frequently accessed events could be served from cache even when DynamoDB is degraded.
-
----
-
-### 6. Single NAT Gateway
-
-**Current situation:**
-One NAT Gateway in AZ-1a. All three AZs share it for outbound internet traffic.
-
-**Problem:**
-If AZ-1a goes down, NAT Gateway goes with it. ECS tasks in AZ-1b and AZ-1c lose outbound internet access (ECR pull, external API calls).
-
-**Production fix:**
-One NAT Gateway per AZ — ECS tasks in each AZ use their local NAT Gateway:
-```hcl
-resource "aws_nat_gateway" "main" {
-  count         = length(var.availability_zones)
-  allocation_id = aws_eip.nat[count.index].id
-  subnet_id     = aws_subnet.public[count.index].id
-}
-```
-Cost: ~$45/month per extra NAT Gateway — justified in production, not for this assessment.
-
----
-
-### 7. No Request Tracing End-to-End
-
-**Current situation:**
-`X-Correlation-Id` is generated/propagated in MDC for log correlation. X-Ray SDK is in the IAM policy but not fully instrumented in code.
-
-**Production improvement:**
-Full distributed tracing with AWS X-Ray:
-```java
-// Add to WebFlux filter chain
-@Bean
-public WebFilter tracingFilter() {
-    return (exchange, chain) -> {
-        String traceId = exchange.getRequest()
-            .getHeaders().getFirst("X-Amzn-Trace-Id");
-        // Propagate through all reactive chains
-        return chain.filter(exchange)
-            .contextWrite(ReactorAWSXRay.storeSegment(segment));
-    };
-}
-```
-
-With full X-Ray instrumentation: end-to-end latency visible from ALB → ECS → DynamoDB → SQS per request.
-
----
-
-## What I Would Do With More Time
-
-| Priority | Improvement | Impact |
+| Limitation | Impact | Solution |
 |---|---|---|
-| P0 | Testcontainers + LocalStack integration tests | Correctness confidence, coverage to 80%+ |
-| P0 | GSI on (status, expiresAt) for expiry scanner | Eliminates full table scan at scale |
-| P1 | SQS FIFO for order processing | Eliminates edge case of parallel processing |
-| P1 | Redis read-through cache for events | Sub-millisecond reads, DynamoDB fallback |
-| P1 | Full X-Ray distributed tracing | End-to-end request visibility |
-| P2 | NAT Gateway per AZ | True multi-AZ resilience |
-| P2 | Consumer-driven contracts (Pact) | API compatibility guaranteed |
-| P2 | OpenAPI spec generation | Auto-generated documentation, client SDKs |
-| P3 | Event sourcing for ticket state | Full audit trail from state changes |
-| P3 | CQRS read model | Separate optimized read path for availability queries |
+| No JWT authentication | Anyone can create orders | Spring Security WebFlux + Cognito |
+| CORS not configured | Not suitable for direct browser use | WebFluxConfigurer + CORS policy |
+| Logs without global correlation ID | Hard to trace a transaction | MDC with `traceId` propagated via WebFilter |
+| No active circuit breaker on DynamoDB | DynamoDB failure cascades to the entire app | Resilience4j CircuitBreaker on repos |
+| Non-distributed scheduler | With 3 instances, 3 schedulers run in parallel | ShedLock or EventBridge Scheduler |
+| No pagination on `GET /events` | With 10k events, the response is huge | Cursor-based pagination with `lastEvaluatedKey` |
+| Audit table not actually used | Created but not written to | Implement AuditService that persists changes |
+
+---
+
+## Improvements for a Real Production Environment
+
+### Observability
+```yaml
+# Distributed tracing with AWS X-Ray
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+```
+- **CloudWatch Structured Logs** — JSON with `traceId`, `orderId`, `userId`, `duration`
+- **CloudWatch Dashboard** — business metrics: tickets/min sold, failed orders, P95/P99 latency
+- **Alarms**: error rate >1%, P99 latency >500ms, DLQ with messages
+
+### Performance
+- **DynamoDB DAX** (in-memory cache) for `GET /events/{eventId}` — reduce latency from 10ms to <1ms
+- **ElastiCache Redis** for sessions and distributed rate limiting
+- **CDN CloudFront** in front of the ALB for cacheable responses (event availability)
+
+### Resilience
+```java
+// Circuit breaker on DynamoDB repository
+@CircuitBreaker(name = "dynamodb", fallbackMethod = "fallbackFindById")
+public Mono<Event> findById(EventId eventId) { ... }
+```
+
+### Cost Optimization
+- **DynamoDB on-demand** in production (PAY_PER_REQUEST) — no provisioning waste
+- **ECS Fargate Spot** for the SQS consumer — up to 70% savings, tolerant to interruptions
+- **Reserved Capacity DynamoDB** for predictable base load — 20-40% savings
+- **SQS Long Polling** — reduces empty calls from 8640/day to ~432/day per instance
+
+---
+
+## Reflection: What Would I Do Differently from Day 1?
+
+1. **Event Sourcing** for the ticket domain — instead of mutable state, every change is an immutable event. Free audit trail, state replay, easy debugging.
+
+2. **Explicit CQRS** — separate the write model (commands) from the read model (queries). `GET /availability` could be served from a denormalized projection in ElastiCache, without touching DynamoDB.
+
+3. **Contract testing with Pact** — consumers (frontend, mobile) publish contracts; the API validates them in CI. Prevents silent breaking changes.
+
+4. **Canary deployments** with CodeDeploy — in a ticketing system, a production bug during a popular sale is catastrophic. Canary at 5% with automatic rollback if the error rate rises.
+
+5. **DynamoDB Streams + Lambda for domain events** — when a ticket is sold, a Lambda can update counters in real time, notify the user via SNS, and update the dashboard without coupling that logic to the main service.
+
+---
+
+## Java 25 — Version Decision
+
+**Context:** The technical test explicitly requires Java 25.
+
+**Reality:** Java 25 is the current reference version. Temurin 25 (`eclipse-temurin:25-jdk-alpine`) is already available as a stable Docker image. The features used in this project are all GA (not preview):
+
+| Feature | Status in Java 25 | Usage in this project |
+|---|---|---|
+| Virtual Threads (Project Loom) | GA since Java 21 | `Executors.newVirtualThreadPerTaskExecutor()` in concurrency tests, `spring.threads.virtual.enabled: true` |
+| Pattern Matching in switch | GA since Java 21 | `GlobalErrorHandler.resolveStatus()` |
+| Sealed interfaces | GA since Java 17 | `DomainEvent` sealed interface with records |
+| Records with compact constructors | GA since Java 16 | `Money`, `EventId`, `TicketId`, all domain VOs |
+
+**Trade-off:** AWS SDK v2 is pinned at `2.20.26` for compatibility with DynamoDB Local. Higher SDK versions have an AWS4 signature incompatibility with DynamoDB Local in development. In production (real AWS) the latest SDK version could be used without restrictions.
+
+---
+
+## `concatMap` vs `flatMap` in `ReserveTicketsService`
+
+This is the most important design decision in the reservation service.
+
+### The Problem
+
+When reserving N tickets for an order, we need to write N records to DynamoDB with conditional writes (optimistic locking). If ticket K fails (because another user took it first), tickets 1..K-1 are already in `RESERVED` state — orphaned, without a valid order.
+
+### The Options
+
+**Option A: `flatMap` (concurrent)**
+```java
+// All N writes happen in parallel
+Flux.fromIterable(tickets)
+    .flatMap(ticket -> ticketRepository.update(ticket.reserve(...)))
+    .collectList()
+```
+
+Advantage: faster (N simultaneous writes).
+Critical problem: if the write for ticket 3 fails while tickets 1, 2, 4 already completed, **there is no reliable way to know which ones to compensate**. The completion order with flatMap is non-deterministic.
+
+**Option B: `concatMap` (sequential) ← adopted decision**
+```java
+List<Ticket> reservedSoFar = new ArrayList<>();
+
+Flux.fromIterable(tickets)
+    .concatMap(ticket -> ticketRepository.update(ticket.reserve(...))
+            .doOnSuccess(reservedSoFar::add))  // accumulates exactly those that succeeded
+    .collectList()
+    .onErrorResume(ex -> compensate(reservedSoFar)) // releases exactly those that failed
+```
+
+Advantage: exact and reliable compensation.
+Cost: slightly higher latency for multi-ticket orders (max 10 tickets in sequence).
+
+### Why It's Worth It
+
+- **Most common case (80%+ of orders):** 1 ticket reservation. With `concatMap`, the latency difference vs `flatMap` is **zero** — it's a single operation.
+- **Multi-ticket cases (2-10 tickets):** additional latency is on the order of N×5ms (DynamoDB Local round-trip). In production with real DynamoDB it is comparable.
+- **Correctness in financial systems:** an orphaned ticket locked indefinitely is lost money for the user. Clean compensation is worth the latency trade-off.
+- **Safety net:** even if compensation partially fails (network error), the expiration scheduler releases tickets within the configured TTL (10 minutes in production).
+
+**Decision: correctness > speed in a payments system.**

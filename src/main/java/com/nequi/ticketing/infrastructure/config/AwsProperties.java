@@ -26,7 +26,8 @@ public record AwsProperties(
             String tickets,
             String orders,
             String idempotency,
-            String audit
+            String audit,
+            String shedlock
     ) {}
 
     public record SqsProperties(

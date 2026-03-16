@@ -1,6 +1,5 @@
 package com.nequi.ticketing.infrastructure.messaging.sqs.consumer;
 
-import tools.jackson.databind.json.JsonMapper;
 import com.nequi.ticketing.application.usecase.CreatePurchaseOrderService.OrderMessage;
 import com.nequi.ticketing.application.usecase.ProcessOrderService;
 import com.nequi.ticketing.infrastructure.config.AwsProperties;
@@ -10,22 +9,30 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException;
 import software.amazon.awssdk.services.sqs.SqsAsyncClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
 
 /**
- * Polls the SQS purchase-orders queue and processes each message.
+ * Polls SQS purchase-orders queue and processes each message.
  *
- * <p>Delivery guarantee: at-least-once.
- * A message is deleted from SQS ONLY after successful processing.
- * If processing fails, the message becomes visible again after the
- * visibility timeout and will be retried (up to maxReceiveCount=3).
- * After 3 failures, SQS moves the message to the Dead Letter Queue.
+ * <p>At-least-once delivery guarantee: a message is deleted ONLY after
+ * successful processing. On failure, the message becomes visible again
+ * after the visibility timeout and retries up to maxReceiveCount=3,
+ * then moves to DLQ.
  *
- * <p>Idempotency: {@link ProcessOrderService} skips orders already
- * in a final state, making repeated processing safe.
+ * <p>Retry strategy: transient failures (network timeouts, DynamoDB throttling)
+ * are retried with exponential backoff (3 attempts, 200ms base, max 2s) BEFORE
+ * returning control to SQS. This reduces DLQ noise from transient blips.
+ * Non-retryable errors (OrderNotFound, business logic) bypass retry and let
+ * SQS handle the requeue — the SQS visibility timeout is the outer retry loop.
  */
 @Component
 public class SqsOrderConsumer {
@@ -34,7 +41,7 @@ public class SqsOrderConsumer {
 
     private final SqsAsyncClient sqsClient;
     private final ProcessOrderService processOrderService;
-    private final JsonMapper objectMapper;
+    private final ObjectMapper objectMapper;
     private final String queueUrl;
     private final int maxMessages;
     private final int waitTimeSeconds;
@@ -42,7 +49,7 @@ public class SqsOrderConsumer {
     public SqsOrderConsumer(
             SqsAsyncClient sqsClient,
             ProcessOrderService processOrderService,
-            JsonMapper objectMapper,
+            ObjectMapper objectMapper,
             AwsProperties awsProperties) {
         this.sqsClient = sqsClient;
         this.processOrderService = processOrderService;
@@ -61,8 +68,7 @@ public class SqsOrderConsumer {
                 .build();
 
         Mono.fromCompletionStage(() -> sqsClient.receiveMessage(request))
-                .map(response -> response.messages())
-                .flatMapMany(Flux::fromIterable)
+                .flatMapMany(response -> Flux.fromIterable(response.messages()))
                 .flatMap(this::processMessage)
                 .subscribe(
                         v -> {},
@@ -76,24 +82,44 @@ public class SqsOrderConsumer {
         return Mono.fromCallable(() ->
                         objectMapper.readValue(message.body(), OrderMessage.class))
                 .flatMap(orderMessage ->
-                        processOrderService.process(orderMessage.orderId()))
+                        processOrderService.process(orderMessage.orderId())
+                                // Retry with exponential backoff for transient failures
+                                // Non-retryable errors skip retry — SQS handles requeue
+                                .retryWhen(Retry.backoff(3, Duration.ofMillis(200))
+                                        .maxBackoff(Duration.ofSeconds(2))
+                                        .filter(this::isRetryable)
+                                        .doBeforeRetry(signal -> log.warn(
+                                                "Retrying order processing attempt {}: {}",
+                                                signal.totalRetriesInARow() + 1,
+                                                signal.failure().getMessage()))))
                 .then(deleteMessage(message))
                 .doOnSuccess(v -> log.debug(
                         "Message processed and deleted: messageId={}", message.messageId()))
                 .onErrorResume(ex -> {
-                    log.error("Failed to process message: messageId={}, error={}",
-                            message.messageId(), ex.getMessage());
+                    // Do NOT delete — SQS requeues after visibility timeout → DLQ after maxReceiveCount
+                    log.error("Message processing failed after retries, leaving for SQS retry: " +
+                            "messageId={}, error={}", message.messageId(), ex.getMessage());
                     return Mono.empty();
                 });
     }
 
-    private Mono<Void> deleteMessage(Message message) {
-        DeleteMessageRequest deleteRequest = DeleteMessageRequest.builder()
-                .queueUrl(queueUrl)
-                .receiptHandle(message.receiptHandle())
-                .build();
+    /**
+     * Identifies transient failures worth retrying immediately.
+     * Business logic errors (OrderNotFound, state violations) are NOT retryable —
+     * retrying them immediately would waste cycles with the same result.
+     */
+    private boolean isRetryable(Throwable ex) {
+        return ex instanceof ProvisionedThroughputExceededException
+                || ex instanceof SdkClientException
+                || (ex.getMessage() != null && ex.getMessage().contains("timeout"));
+    }
 
-        return Mono.fromCompletionStage(() -> sqsClient.deleteMessage(deleteRequest))
+    private Mono<Void> deleteMessage(Message message) {
+        return Mono.fromCompletionStage(() -> sqsClient.deleteMessage(
+                        DeleteMessageRequest.builder()
+                                .queueUrl(queueUrl)
+                                .receiptHandle(message.receiptHandle())
+                                .build()))
                 .then();
     }
 }

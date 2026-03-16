@@ -3,8 +3,7 @@ networks:
     driver: bridge
 
 volumes:
-  dynamodb-data:
-  localstack-data:
+  localstack-data:  # Solo LocalStack necesita persistencia para SQS
 
 services:
 
@@ -13,18 +12,20 @@ services:
     container_name: emp-dynamodb
     command: >
       -jar DynamoDBLocal.jar
+      -inMemory
       -sharedDb
-      -dbPath /home/dynamodblocal/data
     ports:
       - "8000:8000"
     volumes:
-      - dynamodb-data:/home/dynamodblocal/data
+      # Scripts de inicialización (solo lectura)
+      - ./docker/dynamodb/init-tables.sh:/docker-entrypoint-initdb.d/init-tables.sh:ro
+      - ./docker/dynamodb/init-test-dynamodb.sh:/docker-entrypoint-initdb.d/init-test-dynamodb.sh:ro
     networks:
       emp-net:
         aliases:
           - dynamodb
     healthcheck:
-      test: ["CMD-SHELL", "java -version 2>&1 | grep -q 'version' && echo OK || exit 1"]
+      test: ["CMD-SHELL", "curl -s -X POST http://localhost:8000 -H 'Content-Type: application/x-amz-json-1.0' -H 'X-Amz-Target: DynamoDB_20120810.ListTables' -d '{}' | grep -q 'TableNames' || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -45,6 +46,7 @@ services:
         condition: service_healthy
     networks:
       - emp-net
+    profiles: ["dev"]  # Solo para desarrollo, no para pruebas
 
   localstack:
     image: localstack/localstack:3.6
@@ -54,16 +56,16 @@ services:
       DEBUG: 0
       DEFAULT_REGION: us-east-1
       PERSISTENCE: 1
-      DATA_DIR: /var/lib/localstack/data
     ports:
       - "4566:4566"
     volumes:
       - localstack-data:/var/lib/localstack
       - ./docker/localstack/init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh:ro
+      - ./docker/localstack/init-test-sqs.sh:/etc/localstack/init/ready.d/init-test-sqs.sh:ro
     networks:
       - emp-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q 'running'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"sqs\":\"available\"'"]
       interval: 10s
       timeout: 5s
       retries: 10

@@ -1,7 +1,9 @@
 package com.nequi.ticketing.shared.error;
 
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
+import com.nequi.ticketing.domain.exception.EventNotFoundException;
+import com.nequi.ticketing.domain.exception.InvalidTicketStateException;
+import com.nequi.ticketing.domain.exception.OrderNotFoundException;
+import com.nequi.ticketing.domain.exception.TicketNotAvailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
@@ -13,15 +15,18 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebExceptionHandler;
 import reactor.core.publisher.Mono;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 
 /**
  * Global reactive error handler for all unhandled exceptions in WebFlux.
  *
- * <p>Order(-2) ensures this runs before Spring Boot's default error handler.
- * Maps domain and infrastructure exceptions to appropriate HTTP status codes
- * and returns a consistent {@link ErrorResponse} JSON body.
+ * <p>Uses Java 25 pattern matching switch — type-safe, exhaustive,
+ * no string comparison on class names.
+ *
+ * <p>Before (Java 11 style): switch on ex.getClass().getSimpleName() — brittle.
+ * After (Java 25): pattern matching on the actual type — refactor-safe.
  */
 @Component
 @Order(-2)
@@ -29,9 +34,11 @@ public class GlobalErrorHandler implements WebExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalErrorHandler.class);
 
-    private final ObjectMapper objectMapper = JsonMapper.builder()
-            .findAndAddModules()
-            .build();
+    private final ObjectMapper objectMapper;
+
+    public GlobalErrorHandler(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public Mono<Void> handle(ServerWebExchange exchange, Throwable ex) {
@@ -73,20 +80,21 @@ public class GlobalErrorHandler implements WebExceptionHandler {
         return exchange.getResponse().writeWith(Mono.just(buffer));
     }
 
+    /**
+     * Java 25 pattern matching switch — type-safe, no string comparison.
+     * Each case binds the exception to a typed variable (e),
+     * allowing field access without casting.
+     */
     private HttpStatus resolveStatus(Throwable ex) {
         if (ex instanceof ResponseStatusException rse) {
             return HttpStatus.valueOf(rse.getStatusCode().value());
         }
-        return switch (ex.getClass().getSimpleName()) {
-            case "TicketNotAvailableException"      -> HttpStatus.CONFLICT;
-            case "OrderNotFoundException"           -> HttpStatus.NOT_FOUND;
-            case "EventNotFoundException"           -> HttpStatus.NOT_FOUND;
-            case "InvalidTicketStateException"      -> HttpStatus.UNPROCESSABLE_ENTITY;
-            case "DuplicateIdempotencyKeyException" -> HttpStatus.OK;
-            case "MaxTicketsExceededException"      -> HttpStatus.BAD_REQUEST;
-            case "ValidationException"              -> HttpStatus.BAD_REQUEST;
-            case "ConstraintViolationException"     -> HttpStatus.BAD_REQUEST;
-            default                                 -> HttpStatus.INTERNAL_SERVER_ERROR;
+        return switch (ex) {
+            case TicketNotAvailableException e   -> HttpStatus.CONFLICT;
+            case EventNotFoundException e        -> HttpStatus.NOT_FOUND;
+            case OrderNotFoundException e        -> HttpStatus.NOT_FOUND;
+            case InvalidTicketStateException e   -> HttpStatus.UNPROCESSABLE_ENTITY;
+            default                              -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }
 

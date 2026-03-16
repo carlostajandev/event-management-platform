@@ -1,86 +1,84 @@
 # Terraform — Event Management Platform
 
-Infraestructura como código para la plataforma de ticketing. Despliega toda la infraestructura AWS usando módulos reutilizables.
+Infrastructure as code for the ticketing platform. Deploys all AWS infrastructure using reusable modules.
 
-## Estructura
-
+## Structure
 ```
 terraform/
-├── main.tf                   ← Wire de todos los módulos
-├── variables.tf              ← Variables globales
-├── outputs.tf                ← Valores de salida (ALB DNS, tabla names...)
-├── versions.tf               ← Constraints de providers
+├── main.tf                   ← Wires all modules together
+├── variables.tf              ← Global variables
+├── outputs.tf                ← Output values (ALB DNS, table names...)
+├── versions.tf               ← Provider constraints
 ├── modules/
 │   ├── networking/           ← VPC, subnets, NAT, VPC endpoints, SGs
-│   ├── dynamodb/             ← 6 tablas con GSIs, TTL, PITR, encryption
+│   ├── dynamodb/             ← 6 tables with GSIs, TTL, PITR, encryption
 │   ├── sqs/                  ← Queue + DLQ + CloudWatch alarm
 │   ├── ecs/                  ← Cluster, task definition, service, ALB, auto-scaling
-│   └── iam/                  ← Roles con mínimo privilegio
+│   └── iam/                  ← Least-privilege roles
 └── environments/
     ├── prod.tfvars
     └── dev.tfvars
 ```
 
-## Decisiones de arquitectura
+## Architecture Decisions
 
 ### Networking
-- **VPC privada** — ECS tasks en subnets privadas, solo ALB en pública
-- **VPC Endpoints** para DynamoDB, SQS, ECR, CloudWatch — tráfico no sale a internet, reduce costos de NAT Gateway
-- **Security Groups** con reglas mínimas — ECS solo acepta tráfico del ALB, no directo desde internet
+- **Private VPC** — ECS tasks in private subnets, only ALB in public subnet
+- **VPC Endpoints** for DynamoDB, SQS, ECR, CloudWatch — traffic never leaves to the internet, reduces NAT Gateway costs
+- **Security Groups** with minimal rules — ECS only accepts traffic from the ALB, not directly from the internet
 
 ### DynamoDB
-- **PAY_PER_REQUEST** — sin capacity planning, maneja picos de venta de entradas sin throttling
-- **PITR habilitado** en prod — restore a cualquier segundo de los últimos 35 días, crítico para datos financieros
-- **TTL nativo** en tabla de idempotency — las keys expiran automáticamente sin Lambda ni cron
-- **GSI eventId-status-index** en tickets — queries eficientes sin full table scan
-- **Encryption at rest** en todas las tablas — AES-256 gestionado por AWS
+- **PAY_PER_REQUEST** — no capacity planning, handles ticket sale peaks without throttling
+- **PITR enabled** in prod — restore to any second in the last 35 days, critical for financial data
+- **Native TTL** on the idempotency table — keys expire automatically without Lambda or cron
+- **GSI eventId-status-index** on tickets — efficient queries without full table scan
+- **Encryption at rest** on all tables — AES-256 managed by AWS
 
 ### SQS
-- **DLQ con max_receive_count=3** — mensajes fallidos se mueven a DLQ para investigación
-- **Long polling (20s)** — reduce llamadas vacías en ~95%, baja costos
-- **CloudWatch alarm** en DLQ — alerta inmediata cuando hay mensajes fallidos
-- **KMS encryption** — mensajes de órdenes contienen datos financieros
+- **DLQ with max_receive_count=3** — failed messages move to DLQ for investigation
+- **Long polling (20s)** — reduces empty calls by ~95%, lowers costs
+- **CloudWatch alarm** on DLQ — immediate alert when there are failed messages
+- **KMS encryption** — order messages contain financial data
 
 ### ECS
-- **Fargate** — sin gestión de instancias EC2, pago por task
-- **Rolling deployment 50%/200%** — zero downtime en deploys
-- **Health check sobre /actuator/health** — Spring Boot Actuator integrado
-- **Auto-scaling** por request count (ALB) Y CPU — reacciona a tráfico real
-- **Container Insights** habilitado — métricas detalladas de contenedores
+- **Fargate** — no EC2 instance management, pay per task
+- **Rolling deployment 50%/200%** — zero downtime deploys
+- **Health check on /actuator/health** — integrated Spring Boot Actuator
+- **Auto-scaling** by request count (ALB) AND CPU — reacts to real traffic
+- **Container Insights** enabled — detailed container metrics
 
-### IAM — Mínimo privilegio
-Dos roles separados:
+### IAM — Least Privilege
+Two separate roles:
 
 **Task Execution Role** (ECS agent):
 - ECR: pull image
-- CloudWatch: escribir logs
-- Secrets Manager: leer secrets del entorno
+- CloudWatch: write logs
+- Secrets Manager: read environment secrets
 
-**Task Role** (aplicación en runtime):
-- DynamoDB: solo las 6 tablas del proyecto, solo acciones necesarias
-- SQS: solo la cola purchase-orders
-- X-Ray: trazas distribuidas
-- Sin wildcards en recursos
+**Task Role** (application at runtime):
+- DynamoDB: only the 6 project tables, only required actions
+- SQS: only the purchase-orders queue
+- X-Ray: distributed tracing
+- No wildcards on resources
 
-## Comandos
-
+## Commands
 ```bash
-# Inicializar (primera vez)
+# Initialize (first time)
 terraform init
 
-# Ver plan de cambios
+# Preview changes
 terraform plan -var-file=environments/prod.tfvars
 
-# Aplicar
+# Apply
 terraform apply -var-file=environments/prod.tfvars
 
-# Destruir (cuidado en prod)
+# Destroy (careful in prod)
 terraform destroy -var-file=environments/dev.tfvars
 ```
 
-## Estado remoto (producción)
+## Remote State (Production)
 
-Descomentar en `versions.tf`:
+Uncomment in `versions.tf`:
 ```hcl
 backend "s3" {
   bucket         = "nequi-ticketing-tfstate"
@@ -91,17 +89,17 @@ backend "s3" {
 }
 ```
 
-El bucket S3 y la tabla DynamoDB para el lock deben crearse manualmente antes del primer `terraform init`.
+The S3 bucket and DynamoDB table for the lock must be created manually before the first `terraform init`.
 
-## Costos estimados (prod, carga moderada)
+## Estimated Costs (prod, moderate load)
 
-| Recurso | Config | $/mes |
+| Resource | Config | $/month |
 |---|---|---|
 | ECS Fargate | 2 tasks × 0.5vCPU × 1GB | ~$25 |
 | DynamoDB | on-demand, 1M writes + 5M reads | ~$8 |
-| SQS | 1M mensajes | ~$0.40 |
+| SQS | 1M messages | ~$0.40 |
 | ALB | 1 ALB, 10 LCU | ~$20 |
 | NAT Gateway | 100GB | ~$14 |
-| CloudWatch | Logs 5GB, 10 alarmas | ~$5 |
+| CloudWatch | 5GB logs, 10 alarms | ~$5 |
 | VPC Endpoints | Interface endpoints × 4 | ~$30 |
-| **Total** | | **~$102/mes** |
+| **Total** | | **~$102/month** |

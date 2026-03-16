@@ -36,4 +36,6 @@ public interface IdempotencyRepository {
      * @return the cached response JSON, or empty if not found
      */
     Mono<String> findResponse(IdempotencyKey key);
+
+    Mono<Void> updateResponse(IdempotencyKey key, String responseJson);
 }

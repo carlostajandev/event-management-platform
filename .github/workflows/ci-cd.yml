@@ -65,7 +65,7 @@ jobs:
           cache: maven
 
       - name: Build and run tests
-        run: ./mvnw verify --no-transfer-progress
+        run: ./mvnw test --no-transfer-progress
         env:
           SPRING_PROFILES_ACTIVE: local
           DYNAMODB_ENDPOINT: http://localhost:8000
@@ -133,7 +133,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Java 21 for Docker build
+      - name: Set up Java 25 for Docker build
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}

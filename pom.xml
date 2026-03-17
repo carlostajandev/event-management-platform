@@ -257,12 +257,23 @@
                                     </rule>
                                 </rules>
                                 <excludes>
+                                    <!-- Spring wiring — not business logic -->
                                     <exclude>**/config/**</exclude>
                                     <exclude>**/*Application*</exclude>
+
+                                    <!-- Data-transfer objects and persistence entities -->
                                     <exclude>**/dto/**</exclude>
                                     <exclude>**/entity/**</exclude>
+                                    <exclude>**/command/**</exclude>
+
+                                    <!-- Infrastructure layer — covered by *IT integration tests -->
                                     <exclude>**/router/**</exclude>
+                                    <exclude>**/handler/**</exclude>
                                     <exclude>**/filter/**</exclude>
+                                    <exclude>**/scheduler/**</exclude>
+                                    <exclude>**/persistence/**</exclude>
+                                    <exclude>**/messaging/**</exclude>
+                                    <exclude>**/mapper/**</exclude>
                                 </excludes>
                             </configuration>
                         </execution>

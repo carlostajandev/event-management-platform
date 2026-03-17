@@ -12,11 +12,6 @@ resource "aws_dynamodb_table" "events" {
   hash_key     = "PK"
   range_key    = "SK"
 
-<<<<<<< Updated upstream
-  attribute { name = "PK"     type = "S" }
-  attribute { name = "SK"     type = "S" }
-  attribute { name = "GSI1PK" type = "S" }
-=======
   attribute {
     name = "PK"
     type = "S"
@@ -31,7 +26,6 @@ resource "aws_dynamodb_table" "events" {
     name = "GSI1PK"
     type = "S"
   }
->>>>>>> Stashed changes
 
   global_secondary_index {
     name            = "GSI1"
@@ -56,12 +50,6 @@ resource "aws_dynamodb_table" "reservations" {
   hash_key     = "PK"
   range_key    = "SK"
 
-<<<<<<< Updated upstream
-  attribute { name = "PK"     type = "S" }
-  attribute { name = "SK"     type = "S" }
-  attribute { name = "GSI1PK" type = "S" }
-  attribute { name = "GSI1SK" type = "S" }
-=======
   attribute {
     name = "PK"
     type = "S"
@@ -81,7 +69,6 @@ resource "aws_dynamodb_table" "reservations" {
     name = "GSI1SK"
     type = "S"
   }
->>>>>>> Stashed changes
 
   global_secondary_index {
     name            = "GSI1"
@@ -110,11 +97,6 @@ resource "aws_dynamodb_table" "orders" {
   hash_key     = "PK"
   range_key    = "SK"
 
-<<<<<<< Updated upstream
-  attribute { name = "PK"     type = "S" }
-  attribute { name = "SK"     type = "S" }
-  attribute { name = "GSI1PK" type = "S" }
-=======
   attribute {
     name = "PK"
     type = "S"
@@ -129,7 +111,6 @@ resource "aws_dynamodb_table" "orders" {
     name = "GSI1PK"
     type = "S"
   }
->>>>>>> Stashed changes
 
   global_secondary_index {
     name            = "GSI1"
@@ -153,11 +134,6 @@ resource "aws_dynamodb_table" "outbox" {
   hash_key     = "PK"
   range_key    = "SK"
 
-<<<<<<< Updated upstream
-  attribute { name = "PK"     type = "S" }
-  attribute { name = "SK"     type = "S" }
-  attribute { name = "GSI1PK" type = "S" }
-=======
   attribute {
     name = "PK"
     type = "S"
@@ -172,7 +148,6 @@ resource "aws_dynamodb_table" "outbox" {
     name = "GSI1PK"
     type = "S"
   }
->>>>>>> Stashed changes
 
   global_secondary_index {
     name            = "GSI1"
@@ -200,10 +175,6 @@ resource "aws_dynamodb_table" "idempotency" {
   hash_key     = "PK"
   range_key    = "SK"
 
-<<<<<<< Updated upstream
-  attribute { name = "PK" type = "S" }
-  attribute { name = "SK" type = "S" }
-=======
   attribute {
     name = "PK"
     type = "S"
@@ -213,7 +184,6 @@ resource "aws_dynamodb_table" "idempotency" {
     name = "SK"
     type = "S"
   }
->>>>>>> Stashed changes
 
   ttl {
     attribute_name = "ttl"
@@ -235,10 +205,6 @@ resource "aws_dynamodb_table" "audit" {
   hash_key     = "PK"
   range_key    = "SK"
 
-<<<<<<< Updated upstream
-  attribute { name = "PK" type = "S" }
-  attribute { name = "SK" type = "S" }
-=======
   attribute {
     name = "PK"
     type = "S"
@@ -248,7 +214,6 @@ resource "aws_dynamodb_table" "audit" {
     name = "SK"
     type = "S"
   }
->>>>>>> Stashed changes
 
   ttl {
     attribute_name = "ttl"

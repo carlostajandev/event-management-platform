@@ -1,3 +1,4 @@
+
 #-------------------------------------------------------------------------------#
 #               Qodana analysis is configured by qodana.yaml file               #
 #             https://www.jetbrains.com/help/qodana/qodana-yaml.html            #
@@ -12,6 +13,10 @@ version: "1.0"
 #Specify inspection profile for code analysis
 profile:
   name: qodana.starter
+
+# Multi-module monorepo — analyse all 4 services and shared modules
+# Modules: shared/domain, shared/infrastructure, services/event-service,
+#          services/reservation-service, services/order-service, services/consumer-service
 
 #Enable inspections
 #include:

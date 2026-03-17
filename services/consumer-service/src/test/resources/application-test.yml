@@ -1,0 +1,5 @@
+aws:
+  sqs:
+    queue:
+      purchase-orders-name: emp-purchase-orders
+      purchase-orders-dlq-name: emp-purchase-orders-dlq

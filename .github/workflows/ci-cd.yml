@@ -1,147 +1,180 @@
 # ============================================================
-# CI/CD Pipeline — Event Management Platform
+# CI/CD Pipeline — Event Management Platform v2
 #
 # Triggers:
-#   - Push a main/develop: build + test + deploy a staging
-#   - Pull Request a main: validate + test (no deploy)
-#   - Push tag v*: deploy a producción
+#   - Push to main or PR to main: build + test all 4 services
+#   - Push to main: Docker build + push to ECR (4 images)
+#   - Push tag v*: Docker push + manual approval + Terraform apply
 #
 # Jobs:
-#   1. test        — Maven build + 65 tests + JaCoCo
-#   2. tf-validate — terraform fmt + validate (sin credenciales)
-#   3. docker      — build + push a ECR (solo main/tags)
-#   4. tf-plan     — terraform plan contra staging
-#   5. tf-apply    — terraform apply (requiere aprobación manual en prod)
-#   6. deploy      — ECS rolling update
+#   1. build-shared  — install shared/domain and shared/infrastructure
+#   2. test          — matrix: 4 services in parallel with JaCoCo
+#   3. tf-validate   — terraform fmt check + validate (no credentials)
+#   4. docker        — build + push 4 ECR images (main/tags only)
+#   5. tf-plan       — terraform plan against staging
+#   6. deploy-prod   — terraform apply + ECS health check (tags only)
 # ============================================================
 
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     tags: ['v*']
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: emp
   JAVA_VERSION: '25'
 
 jobs:
 
   # ──────────────────────────────────────────────────────────
-  # JOB 1: Build y Tests
+  # JOB 1: Build shared modules (required by all services)
   # ──────────────────────────────────────────────────────────
-  test:
-    name: Build & Test
+  build-shared:
+    name: Build Shared Modules
     runs-on: ubuntu-latest
 
-    services:
-      # DynamoDB Local para tests de integración
-      dynamodb-local:
-        image: amazon/dynamodb-local:1.25.0
-        ports:
-          - 8000:8000
-
-      # LocalStack para SQS
-      localstack:
-        image: localstack/localstack:3.6
-        ports:
-          - 4566:4566
-        env:
-          SERVICES: sqs
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 21 LTS
+      - name: Set up Java ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
 
-      - name: Build and run tests
-        run: ./mvnw test --no-transfer-progress
-        env:
-          SPRING_PROFILES_ACTIVE: local
-          DYNAMODB_ENDPOINT: http://localhost:8000
-          SQS_ENDPOINT: http://localhost:4566
+      - name: Install shared/domain and shared/infrastructure
+        run: ./mvnw install -pl shared/domain,shared/infrastructure -DskipTests --no-transfer-progress
 
-      - name: Upload JaCoCo coverage report
+      - name: Cache shared modules for downstream jobs
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/com/nequi
+          key: shared-modules-${{ github.sha }}
+          restore-keys: |
+            shared-modules-
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 2: Test — multi-service matrix (4 services in parallel)
+  # ──────────────────────────────────────────────────────────
+  test:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [build-shared]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - event-service
+          - reservation-service
+          - order-service
+          - consumer-service
+
+    # No services: block — each *IT.java starts its own LocalStack via Testcontainers.
+    # Provisioning a CI-side LocalStack would be redundant and waste ~20s per job.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Restore shared modules from cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/com/nequi
+          key: shared-modules-${{ github.sha }}
+          restore-keys: |
+            shared-modules-
+
+      - name: Run unit and integration tests — ${{ matrix.service }}
+        run: |
+          ./mvnw verify -pl services/${{ matrix.service }} \
+            --no-transfer-progress \
+            -Dspring.profiles.active=test
+        env:
+          SPRING_PROFILES_ACTIVE: test
+
+      - name: Upload JaCoCo report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: jacoco-report
-          path: target/site/jacoco/
-
-      - name: Check coverage gate
-        run: |
-          echo "Coverage gate enforced by JaCoCo in pom.xml — build fails if < 80% lines / 70% branches"
+          name: jacoco-${{ matrix.service }}
+          path: services/${{ matrix.service }}/target/site/jacoco/
+          retention-days: 7
 
   # ──────────────────────────────────────────────────────────
-  # JOB 2: Terraform Validate
-  # No requiere credenciales AWS — solo valida sintaxis
+  # JOB 3: Terraform Validate (no AWS credentials needed)
   # ──────────────────────────────────────────────────────────
   tf-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~> 1.7"
 
-      - name: Terraform Format Check
-        working-directory: terraform
-        run: |
-          terraform fmt -check -recursive
-          echo "✓ All .tf files are properly formatted"
+      - name: Terraform fmt check
+        working-directory: infrastructure/terraform
+        run: terraform fmt -check -recursive
 
-      - name: Terraform Init (local validation only)
-        working-directory: terraform
+      - name: Terraform init (local — no backend)
+        working-directory: infrastructure/terraform
         run: terraform init -backend=false
 
-      - name: Terraform Validate
-        working-directory: terraform
-        run: |
-          terraform validate
-          echo "✓ Terraform configuration is valid"
+      - name: Terraform validate
+        working-directory: infrastructure/terraform
+        run: terraform validate
 
   # ──────────────────────────────────────────────────────────
-  # JOB 3: Docker Build + Push a ECR
-  # Solo en push a main o tags de versión
+  # JOB 4: Docker Build + Push to ECR (4 images)
+  # Only on push to main or version tags
   # ──────────────────────────────────────────────────────────
   docker:
-    name: Docker Build & Push
+    name: Docker — ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [test, tf-validate]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
 
+    strategy:
+      matrix:
+        service:
+          - event-service
+          - reservation-service
+          - order-service
+          - consumer-service
+
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.version }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 25 for Docker build
+      - name: Set up Java ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
           cache: maven
 
-      - name: Build JAR
-        run: ./mvnw package -DskipTests --no-transfer-progress
+      - name: Build shared modules
+        run: ./mvnw install -pl shared/domain,shared/infrastructure -DskipTests --no-transfer-progress
+
+      - name: Package ${{ matrix.service }}
+        run: ./mvnw package -pl services/${{ matrix.service }} -DskipTests --no-transfer-progress
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -158,25 +191,24 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          images: ${{ steps.login-ecr.outputs.registry }}/emp-${{ matrix.service }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=sha,prefix=sha-,format=short
 
-      - name: Build and push Docker image
-        id: build
+      - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: services/${{ matrix.service }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
   # ──────────────────────────────────────────────────────────
-  # JOB 4: Terraform Plan (staging)
+  # JOB 5: Terraform Plan (staging)
   # ──────────────────────────────────────────────────────────
   tf-plan:
     name: Terraform Plan (staging)
@@ -185,8 +217,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -201,30 +232,28 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
-        working-directory: terraform
+        working-directory: infrastructure/terraform
         run: terraform init
 
       - name: Terraform Plan
-        working-directory: terraform
+        working-directory: infrastructure/terraform
         run: |
           terraform plan \
-            -var-file=environments/dev.tfvars \
-            -var="app_image=${{ needs.docker.outputs.image-tag }}" \
+            -var-file=environments/staging.tfvars \
             -out=tfplan \
             -no-color
         env:
-          TF_VAR_environment: staging
+          TF_WORKSPACE: staging
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan
-          path: terraform/tfplan
+          name: tfplan-staging
+          path: infrastructure/terraform/tfplan
           retention-days: 5
 
   # ──────────────────────────────────────────────────────────
-  # JOB 5: Terraform Apply + Deploy (producción)
-  # Solo en tags v* — requiere aprobación manual en GitHub
+  # JOB 6: Deploy Production (tags v* only — requires manual approval)
   # ──────────────────────────────────────────────────────────
   deploy-prod:
     name: Deploy Production
@@ -232,12 +261,11 @@ jobs:
     needs: [docker]
     if: startsWith(github.ref, 'refs/tags/v')
     environment:
-      name: production       # ← Requiere aprobación manual en GitHub Settings
+      name: production
       url: https://ticketing.nequi.com
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -252,28 +280,36 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
-        working-directory: terraform
+        working-directory: infrastructure/terraform
         run: terraform init
 
-      - name: Terraform Apply
-        working-directory: terraform
+      - name: Terraform Apply (production)
+        working-directory: infrastructure/terraform
         run: |
           terraform apply \
-            -var-file=environments/prod.tfvars \
-            -var="app_image=${{ needs.docker.outputs.image-tag }}" \
+            -var-file=environments/production.tfvars \
             -auto-approve \
             -no-color
+        env:
+          TF_WORKSPACE: production
 
-      - name: Wait for ECS deployment
+      - name: Wait for ECS services stable
         run: |
-          aws ecs wait services-stable \
-            --cluster emp-prod-cluster \
-            --services emp-prod-service \
-            --region ${{ env.AWS_REGION }}
-          echo "✓ ECS service stable"
+          for service in emp-event-service emp-reservation-service emp-order-service emp-consumer-service; do
+            echo "Waiting for $service..."
+            aws ecs wait services-stable \
+              --cluster emp-prod-cluster \
+              --services $service \
+              --region ${{ env.AWS_REGION }}
+          done
+          echo "All 4 ECS services stable"
 
-      - name: Smoke test
+      - name: Health check all services
         run: |
-          ALB_DNS=$(terraform -chdir=terraform output -raw alb_dns_name)
-          curl -f "https://${ALB_DNS}/actuator/health" | jq '.status'
-          echo "✓ Health check passed"
+          ALB_DNS=$(terraform -chdir=infrastructure/terraform output -raw alb_dns_name)
+          for port in 8081 8082 8083 8084; do
+            STATUS=$(curl -sf "https://${ALB_DNS}/actuator/health" -H "X-Service-Port: $port" | jq -r '.status' || echo "DOWN")
+            echo "Port $port: $STATUS"
+            [ "$STATUS" = "UP" ] || exit 1
+          done
+          echo "All health checks passed"

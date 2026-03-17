@@ -19,6 +19,7 @@ logs/
 .classpath
 .project
 .settings/
+.claude/
 
 ### OS ###
 .DS_Store
@@ -34,9 +35,6 @@ data/
 .aws/
 .env
 *.env
-*.pem
-*.key
-*.crt
 secrets/
 
 ### Test reports ###
@@ -44,29 +42,40 @@ coverage/
 jacoco.exec
 test-output/
 
-### Local DB ###
-*.db
-*.sqlite
-*.sqlite3
-
 ### Temporary files ###
 *.tmp
 *.bak
 *.old
 
 ### Spring profiles ###
-application-local.yml
+# application-test.yml y application-local.yml se commitean — son seguros
+# Los siguientes NUNCA deben llegar al repo
 application-dev.yml
+application-staging.yml
 application-prod.yml
+application-secret.yml
 
-### Node ###
-node_modules/
+### Certificates & keystores ###
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+
+### Docker local volumes ###
+infrastructure/grafana/data/
+infrastructure/prometheus/data/
+
+### Postman — environments can contain tokens, collections are safe ###
+postman/*.postman_environment.json
+postman/*.postman_globals.json
 
 # ── Terraform ─────────────────────────────────────────────────────────────────
 
-# Directorio de plugins y módulos descargados por terraform init
+# Directorio de plugins descargados por terraform init
 .terraform/
-.terraform.lock.hcl
+# NOTA: .terraform.lock.hcl NO se ignora — debe commitearse
+# Registra las versiones exactas de providers para reproducibilidad
 
 # Estado local — NUNCA commitear, contiene ARNs, IPs, secrets
 *.tfstate

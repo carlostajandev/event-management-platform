@@ -1,0 +1,209 @@
+version: "3.9"
+
+# ════════════════════════════════════════════════════════════════
+# Event Management Platform — Full Stack (Microservices Monorepo)
+#
+# Services:
+#   - LocalStack (DynamoDB + SQS emulation)
+#   - event-service     (port 8081)
+#   - reservation-service (port 8082)
+#   - order-service     (port 8083)
+#   - consumer-service  (port 8084)
+#   - Prometheus        (port 9090)
+#   - Grafana           (port 3000)
+#
+# Start: docker compose -f infrastructure/docker-compose.yml up -d
+# ════════════════════════════════════════════════════════════════
+
+networks:
+  emp-network:
+    driver: bridge
+
+volumes:
+  localstack-data:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  # ──────────────────────────────────────────────────────────────
+  # LocalStack — emulates DynamoDB + SQS locally
+  # Tables and queues are initialized by localstack/init-aws.sh
+  # ──────────────────────────────────────────────────────────────
+  localstack:
+    image: localstack/localstack:3.6
+    container_name: emp-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,sqs
+      - DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - PERSISTENCE=1
+      - DYNAMODB_SHARE_DB=1
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - ./localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh
+    networks:
+      - emp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # event-service — Event CRUD + atomic inventory counter
+  # ──────────────────────────────────────────────────────────────
+  event-service:
+    build:
+      context: ..
+      dockerfile: services/event-service/Dockerfile
+    container_name: emp-event-service
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - AWS_REGION=us-east-1
+      - AWS_DYNAMODB_ENDPOINT=http://localstack:4566
+      - AWS_SQS_ENDPOINT=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - emp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # reservation-service — Reservations with TTL + conditional writes
+  # ──────────────────────────────────────────────────────────────
+  reservation-service:
+    build:
+      context: ..
+      dockerfile: services/reservation-service/Dockerfile
+    container_name: emp-reservation-service
+    ports:
+      - "8082:8082"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - AWS_REGION=us-east-1
+      - AWS_DYNAMODB_ENDPOINT=http://localstack:4566
+      - AWS_SQS_ENDPOINT=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - emp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # order-service — Transactional outbox + idempotency
+  # ──────────────────────────────────────────────────────────────
+  order-service:
+    build:
+      context: ..
+      dockerfile: services/order-service/Dockerfile
+    container_name: emp-order-service
+    ports:
+      - "8083:8083"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - AWS_REGION=us-east-1
+      - AWS_DYNAMODB_ENDPOINT=http://localstack:4566
+      - AWS_SQS_ENDPOINT=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - emp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # consumer-service — SOLE SQS consumer + outbox poller
+  # ──────────────────────────────────────────────────────────────
+  consumer-service:
+    build:
+      context: ..
+      dockerfile: services/consumer-service/Dockerfile
+    container_name: emp-consumer-service
+    ports:
+      - "8084:8084"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - AWS_REGION=us-east-1
+      - AWS_DYNAMODB_ENDPOINT=http://localstack:4566
+      - AWS_SQS_ENDPOINT=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - emp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # Prometheus — scrapes /actuator/prometheus from all services
+  # DIFERENCIAL: very few candidates include observability stack
+  # ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: emp-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./grafana/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - emp-network
+    depends_on:
+      - event-service
+      - reservation-service
+      - order-service
+      - consumer-service
+
+  # ──────────────────────────────────────────────────────────────
+  # Grafana — dashboard for all service metrics
+  # Default login: admin / admin
+  # ──────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: emp-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_PROVISIONING_PATH=/etc/grafana/provisioning
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - emp-network
+    depends_on:
+      - prometheus

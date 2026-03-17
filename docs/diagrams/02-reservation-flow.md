@@ -1,123 +1,108 @@
-# Ticket Reservation — Complete Flow Diagram
+# Reservation & Order Flow — Microservices v2
 
-## Happy Path
+## Complete Happy Path
 
-```
-POST /api/v1/orders
-Headers: Content-Type: application/json
-         X-Idempotency-Key: {uuid}
-Body:    { eventId, userId, quantity }
-         │
-         ▼
-┌─────────────────────────────────────────────────┐
-│            CorrelationIdFilter                  │
-│  Set X-Correlation-Id in MDC (generate if none) │
-└─────────────────────────┬───────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────┐
-│               OrderHandler                      │
-│  1. Extract X-Idempotency-Key header            │
-│  2. If missing → 400 Bad Request                │
-│  3. Validate body (Bean Validation)             │
-│  4. If invalid → 400 with field errors          │
-│  5. Delegate to CreatePurchaseOrderUseCase      │
-└─────────────────────────┬───────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────┐
-│         CreatePurchaseOrderService              │
-│  1. Check idempotencyKey in DynamoDB            │
-│     → If found: return cached response (200)    │
-│  2. Call ReserveTicketsUseCase                  │
-└──────────────┬──────────────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────────────┐
-│           ReserveTicketsService                 │
-│  1. findById(eventId)                           │
-│     → If not found: throw EventNotFoundException│
-│  2. findAvailable(eventId, quantity)            │
-│     → If insufficient: throw NotAvailableExc.  │
-│  3. For each ticket:                            │
-│     update(AVAILABLE → RESERVED, version+1)    │
-│     ConditionExpression: version = expectedVer │
-│     → If ConditionalCheckFailed: retry(409)    │
-│  4. Save idempotencyKey → response in DynamoDB  │
-│  5. Create Order(PENDING) in DynamoDB           │
-│  6. Return OrderResponse(RESERVED, expiresAt)  │
-└─────────────────────────┬───────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────┐
-│        CreatePurchaseOrderService               │
-│  6. Publish OrderCreatedEvent to SQS            │
-│     (async — does not block response)           │
-└─────────────────────────┬───────────────────────┘
-                          │
-                          ▼
-       201 Created — OrderResponse
-       { orderId, status: RESERVED, expiresAt }
+```mermaid
+sequenceDiagram
+    actor Client
+    participant ES as event-service :8081
+    participant RS as reservation-service :8082
+    participant OS as order-service :8083
+    participant DDB as DynamoDB
+    participant CS as consumer-service :8084
+    participant SQS as SQS
 
-═══════════════════════════════════════════════════
-            ASYNC — SQS Consumer
-═══════════════════════════════════════════════════
+    %% ── Step 1: Create Event ───────────────────────────────────
+    Client->>ES: POST /api/v1/events {name, totalCapacity:10, price}
+    ES->>DDB: PutItem EVENT#evt_123 METADATA<br/>availableCount=10, version=0, GSI1PK=STATUS#ACTIVE
+    DDB-->>ES: OK
+    ES-->>Client: 201 {id:"evt_123", availableCount:10}
 
-SqsOrderConsumer polls every 5s
-         │
-         ▼
-ProcessOrderService
-  1. findById(orderId)
-  2. If status is CONFIRMED/CANCELLED → skip (idempotent)
-  3. update(Order → PROCESSING)
-  4. For each ticketId:
-     confirmPending(ticket)   → PENDING_CONFIRMATION
-     sell(ticket)             → SOLD
-  5. update(Order → CONFIRMED)
-  6. deleteMessage from SQS
+    %% ── Step 2: Reserve Tickets (Conditional Write) ────────────
+    Client->>RS: POST /api/v1/reservations {eventId, userId, seatsCount:2}
+    RS->>DDB: UpdateItem EVENT#evt_123<br/>condition: availableCount>=2 AND version=0<br/>SET availableCount=8, version=1
+    DDB-->>RS: OK (atomic decrement)
+    RS->>DDB: PutItem RESERVATION#res_456<br/>USER#user_789 TTL=now+600s
+    RS->>DDB: PutItem AUDIT#res_456 NONE→ACTIVE
+    DDB-->>RS: OK
+    RS-->>Client: 201 {id:"res_456", status:ACTIVE, expiresAt:+10min}
+
+    %% ── Step 3: Create Order (Transactional Outbox) ────────────
+    Client->>OS: POST /api/v1/orders<br/>X-Idempotency-Key: uuid-001<br/>{reservationId:"res_456", userId}
+    OS->>DDB: GetItem KEY#uuid-001 (idempotency check)
+    DDB-->>OS: empty (first request)
+    OS->>DDB: GetItem RESERVATION#res_456
+    DDB-->>OS: {status:ACTIVE, userId matches}
+    OS->>DDB: TransactWriteItems [<br/>  PutItem ORDER#ord_789 PENDING_CONFIRMATION,<br/>  PutItem OUTBOX#msg_001 published=false<br/>]
+    DDB-->>OS: OK (atomic — both or neither)
+    OS->>DDB: PutItem KEY#uuid-001 (cache 24h)
+    OS->>DDB: PutItem AUDIT#ord_789 NONE→PENDING_CONFIRMATION
+    OS-->>Client: 201 {id:"ord_789", status:PENDING_CONFIRMATION}
+
+    %% ── Step 4: OutboxPoller publishes to SQS ──────────────────
+    Note over CS: OutboxPoller every 5s
+    CS->>DDB: Query OUTBOX GSI1 (PUBLISHED#false)
+    DDB-->>CS: [msg_001]
+    CS->>SQS: SendMessage {orderId:"ord_789"}
+    CS->>DDB: UpdateItem OUTBOX#msg_001 published=true
+
+    %% ── Step 5: SQS Consumer processes order ───────────────────
+    SQS->>CS: @SqsListener receives message
+    CS->>DDB: GetItem ORDER#ord_789
+    DDB-->>CS: {status:PENDING_CONFIRMATION}
+    CS->>DDB: UpdateItem ORDER#ord_789 → CONFIRMED
+    CS->>DDB: UpdateItem RESERVATION#res_456 → CONFIRMED
+    CS->>DDB: PutItem AUDIT#ord_789 PENDING→CONFIRMED
+    CS->>DDB: PutItem AUDIT#res_456 ACTIVE→CONFIRMED
+    CS-->>SQS: ack ON_SUCCESS (SQS deletes message)
 ```
 
-## Error Paths
+## Reservation Expiry Flow
 
-```
-Missing X-Idempotency-Key:
-  → 400 Bad Request: "X-Idempotency-Key header is required"
+```mermaid
+sequenceDiagram
+    participant TTL as DynamoDB TTL
+    participant DDB as DynamoDB
+    participant Sched as ReservationExpiryScheduler
+    participant ES as event-service
 
-Event not found:
-  → EventNotFoundException → GlobalErrorHandler → 404
-  → { status: 404, message: "Event not found: evt_xxx" }
+    Note over TTL,DDB: Primary: DynamoDB auto-deletes expired items
+    Note over TTL,DDB: ttl = now + 600s (epoch seconds)
+    TTL->>DDB: Auto-delete RESERVATION#res_456 when ttl expires
 
-Not enough tickets:
-  → TicketNotAvailableException → GlobalErrorHandler → 409
-  → { status: 409, message: "No available tickets for event: evt_xxx" }
-
-Concurrent modification (optimistic lock):
-  → ConditionalCheckFailedException → retry logic
-  → After max retries: TicketNotAvailableException → 409
-
-DynamoDB circuit breaker open:
-  → CallNotPermittedException → GlobalErrorHandler → 503
-  → { status: 503, message: "Service temporarily unavailable" }
-
-Duplicate idempotency key:
-  → Return cached response immediately (no processing)
-  → Same orderId, same status as original response
+    Note over Sched,DDB: Fallback (LocalStack - no Streams): runs every 60s
+    Sched->>DDB: Query GSI1 STATUS#ACTIVE AND GSI1SK <= now
+    Note right of DDB: O(results) NOT O(table scan)
+    DDB-->>Sched: [res_456]
+    Sched->>DDB: UpdateItem RESERVATION#res_456 ACTIVE→EXPIRED
+    Sched->>DDB: UpdateItem EVENT#evt_123<br/>SET availableCount = availableCount + 2
+    Sched->>DDB: PutItem AUDIT#res_456 ACTIVE→EXPIRED
 ```
 
-## Expiry Flow (Scheduler)
+## Oversell Prevention Under Concurrency
 
-```
-ExpiredReservationScheduler
-  @Scheduled(fixedDelay = 60000)
-  @SchedulerLock(name="release-expired", lockAtMostFor=55s)
-         │
-         ▼ (only ONE ECS instance runs this — ShedLock)
-ReleaseExpiredReservationsService
-  1. Scan tickets WHERE status=RESERVED AND expiresAt < now
-  2. For each expired ticket:
-     release(ticket) → AVAILABLE
-  3. Log "Released N expired reservations"
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1
+    participant C2 as Client 2
+    participant RS as reservation-service
+    participant DDB as DynamoDB
 
-Note: ShedLock ensures only one instance runs per cycle.
-      lockAtMostFor=55s releases lock even on instance crash.
+    Note over DDB: EVENT#evt_123: availableCount=1, version=10
+
+    par Concurrent requests
+        C1->>RS: Reserve 1 seat
+        RS->>DDB: UpdateItem condition: count>=1 AND version=10
+        C2->>RS: Reserve 1 seat
+        RS->>DDB: UpdateItem condition: count>=1 AND version=10
+    end
+
+    DDB-->>RS: OK (C1 wins — version=11)
+    DDB-->>RS: ConditionalCheckFailedException (C2 loses)
+
+    RS->>RS: retryWhen(backoff 100ms, max 3)
+    RS->>DDB: GetItem EVENT#evt_123 (re-read)
+    DDB-->>RS: availableCount=0, version=11
+    RS-->>C1: 201 {reservationId, status:ACTIVE}
+    RS-->>C2: 409 Conflict — no tickets available
 ```

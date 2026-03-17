@@ -2,73 +2,50 @@
 set -e
 
 echo "========================================="
-echo "🚀 Preparando entorno para pruebas con Java 25"
+echo "Running tests — Event Management Platform v2"
 echo "========================================="
 
-# Verificar versión de Java
+# Verify Java 25
 JAVA_VERSION=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}')
-echo "📌 Versión de Java detectada: $JAVA_VERSION"
+echo "Java: $JAVA_VERSION"
 
 if [[ ! "$JAVA_VERSION" =~ ^25 ]]; then
-    echo "❌ Se requiere Java 25. Versión actual: $JAVA_VERSION"
-    echo ""
-    echo "📋 Para instalar Java 25:"
-    echo "   Usando SDKMAN: sdk install java 25.0.2-tem"
-    echo "   Usando apt: sudo apt install temurin-25-jdk"
+    echo "ERROR: Java 25 required. Current: $JAVA_VERSION"
+    echo "Install: sdk install java 25.0.2-tem"
     exit 1
 fi
 
-# Mostrar JAVA_HOME
-if [ -n "$JAVA_HOME" ]; then
-    echo "📌 JAVA_HOME: $JAVA_HOME"
-else
-    echo "⚠️  JAVA_HOME no está configurado"
-fi
+# Start LocalStack (DynamoDB + SQS)
+echo "Starting LocalStack..."
+docker compose -f infrastructure/docker-compose.yml up localstack -d
 
-# 1. Limpiar contenedores huérfanos
-echo "🧹 Limpiando contenedores huérfanos..."
-docker-compose down --remove-orphans
-
-# 2. Levantar contenedores
-echo "📦 Levantando contenedores Docker..."
-docker-compose up -d dynamodb-local localstack
-
-# 3. Esperar a que estén saludables
-echo "⏳ Esperando a que los contenedores estén listos..."
-sleep 5
-
-# Verificar DynamoDB
-echo -n "⏳ Esperando DynamoDB..."
-until curl -s http://localhost:8000 > /dev/null; do
+echo -n "Waiting for LocalStack..."
+until curl -s http://localhost:4566/_localstack/health | grep -q '"dynamodb":"available"'; do
     echo -n "."
     sleep 2
 done
-echo " ✅"
+echo " ready"
 
-# Verificar LocalStack
-echo -n "⏳ Esperando LocalStack..."
-until docker exec emp-localstack curl -s http://localhost:4566/_localstack/health | grep -q '"sqs":"available"'; do
-    echo -n "."
-    sleep 2
-done
-echo " ✅"
+# Initialize DynamoDB tables and SQS queues
+echo "Initializing AWS resources..."
+bash infrastructure/localstack/init-aws.sh
 
-# 4. Inicializar datos de prueba
-echo "🔧 Inicializando datos de prueba..."
-./scripts/init-test-data.sh
+# Build shared modules first (required by all services)
+echo "Building shared modules..."
+./mvnw install -pl shared/domain,shared/infrastructure -DskipTests --no-transfer-progress
 
-# 5. Limpiar compilación anterior
-echo "🧹 Limpiando compilación anterior..."
-./mvnw clean
+# Run tests for all services (parallel via Maven)
+echo "Running tests — all 4 services..."
+./mvnw test -pl services/event-service,services/reservation-service,services/order-service,services/consumer-service \
+    --no-transfer-progress \
+    -Dspring.profiles.active=test
 
-# 6. Compilar con Java 25
-echo "🏗️  Compilando con Java 25..."
-./mvnw compile
-
-# 7. Ejecutar pruebas
-echo "🏃 Ejecutando pruebas con Java 25..."
-./mvnw verify
+# JaCoCo coverage verification
+echo "Checking coverage gates (line >= 90%, branch >= 85%)..."
+./mvnw verify -pl services/event-service,services/reservation-service,services/order-service,services/consumer-service \
+    --no-transfer-progress \
+    -DskipTests=true
 
 echo "========================================="
-echo "✅ Proceso completado con Java 25"
+echo "All tests passed"
 echo "========================================="

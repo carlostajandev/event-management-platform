@@ -16,53 +16,71 @@
     </parent>
 
     <!-- ══════════════════════════════════════════════════════════
-         PROJECT COORDINATES
+         PROJECT COORDINATES — monorepo root (pom packaging)
          ══════════════════════════════════════════════════════════ -->
     <groupId>com.nequi</groupId>
     <artifactId>event-management-platform</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
-    <packaging>jar</packaging>
+    <version>2.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
 
     <name>event-management-platform</name>
     <description>
-        Reactive ticketing platform — Clean Architecture, Spring Boot 4,
-        WebFlux, DynamoDB, SQS. Java 25 modernized version.
+        Reactive event ticketing platform — Microservices monorepo.
+        Clean Architecture, Spring Boot 4, WebFlux, DynamoDB, SQS.
+        Java 25 with Records, Pattern Matching, Virtual Threads.
     </description>
+
+    <!-- ══════════════════════════════════════════════════════════
+         MODULES — Maven multi-module reactor order matters:
+         shared/* must build before services/* (dependency order)
+         ══════════════════════════════════════════════════════════ -->
+    <modules>
+        <module>shared/domain</module>
+        <module>shared/infrastructure</module>
+        <module>services/event-service</module>
+        <module>services/reservation-service</module>
+        <module>services/order-service</module>
+        <module>services/consumer-service</module>
+    </modules>
 
     <!-- ══════════════════════════════════════════════════════════
          PROPERTIES — centralized versions, no duplication
          ══════════════════════════════════════════════════════════ -->
     <properties>
-        <!-- Java 25 — matches installed JDK -->
+        <!-- Java 25 — Virtual Threads, Records, Pattern Matching, Sealed Classes -->
         <java.version>25</java.version>
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <maven.compiler.release>25</maven.compiler.release>
 
-        <!-- AWS SDK v2 — pinned for DynamoDB Local compatibility.
-             Higher versions have AWS4 signature issues with DynamoDB Local. -->
+        <!-- AWS SDK v2 -->
         <aws.sdk.version>2.20.26</aws.sdk.version>
+
+        <!-- Spring Cloud AWS — @SqsListener in consumer-service -->
+        <spring-cloud-aws.version>3.2.1</spring-cloud-aws.version>
 
         <!-- Application libraries -->
         <mapstruct.version>1.6.3</mapstruct.version>
         <resilience4j.version>2.3.0</resilience4j.version>
         <logstash.encoder.version>8.0</logstash.encoder.version>
-        <shedlock.version>6.0.1</shedlock.version>
 
         <!-- Test libraries -->
-        <testcontainers.version>1.20.4</testcontainers.version>
+        <testcontainers.version>1.21.3</testcontainers.version>
 
-        <!-- Quality — minimum coverage thresholds enforced by JaCoCo -->
-        <jacoco.minimum.line.coverage>0.80</jacoco.minimum.line.coverage>
-        <jacoco.minimum.branch.coverage>0.70</jacoco.minimum.branch.coverage>
+        <!-- Quality — 90% coverage as required by Nequi evaluation -->
+        <jacoco.minimum.line.coverage>0.90</jacoco.minimum.line.coverage>
+        <jacoco.minimum.branch.coverage>0.85</jacoco.minimum.branch.coverage>
+
+        <!-- Skip Spring Boot repackage in shared modules (not runnable JARs) -->
+        <spring-boot.repackage.skip>false</spring-boot.repackage.skip>
     </properties>
 
     <!-- ══════════════════════════════════════════════════════════
-         DEPENDENCY MANAGEMENT — BOM imports
+         DEPENDENCY MANAGEMENT — BOM imports + shared versions
          ══════════════════════════════════════════════════════════ -->
     <dependencyManagement>
         <dependencies>
-            <!-- AWS SDK v2 BOM — manages all SDK module versions -->
+            <!-- AWS SDK v2 BOM -->
             <dependency>
                 <groupId>software.amazon.awssdk</groupId>
                 <artifactId>bom</artifactId>
@@ -71,7 +89,16 @@
                 <scope>import</scope>
             </dependency>
 
-            <!-- Testcontainers BOM — manages all testcontainers module versions -->
+            <!-- Spring Cloud AWS BOM — SQS Listener support -->
+            <dependency>
+                <groupId>io.awspring.cloud</groupId>
+                <artifactId>spring-cloud-aws-dependencies</artifactId>
+                <version>${spring-cloud-aws.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Testcontainers BOM -->
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
@@ -79,174 +106,36 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+            <!-- Internal shared modules -->
+            <dependency>
+                <groupId>com.nequi</groupId>
+                <artifactId>shared-domain</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nequi</groupId>
+                <artifactId>shared-infrastructure</artifactId>
+                <version>${project.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
     <!-- ══════════════════════════════════════════════════════════
-         DEPENDENCIES — ALL ORIGINAL DEPENDENCIES PRESERVED
+         COMMON DEPENDENCIES — available in ALL modules
          ══════════════════════════════════════════════════════════ -->
     <dependencies>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  SPRING BOOT — reactive core                        │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- WebFlux on Netty — non-blocking model, higher throughput
-             for I/O-intensive workloads (DynamoDB, SQS) -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webflux</artifactId>
-        </dependency>
-
-        <!-- Bean Validation (Jakarta) — @NotBlank, @Min, @Max on DTOs -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-validation</artifactId>
-        </dependency>
-
-        <!-- Actuator — /health, /metrics, /prometheus, /info endpoints -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-
-        <!-- Configuration processor — generates IDE metadata for @ConfigurationProperties -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-configuration-processor</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  AWS SDK v2 — DynamoDB + SQS                        │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- DynamoDB Enhanced Client — high-level API, non-blocking -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>dynamodb-enhanced</artifactId>
-        </dependency>
-
-        <!-- SQS async client — message publishing and consumption -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>sqs</artifactId>
-        </dependency>
-
-        <!-- Netty HTTP client — async AWS calls within WebFlux event loop -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>netty-nio-client</artifactId>
-        </dependency>
-
-        <!-- URL connection client — used by DynamoDbTableInitializer.
-             @PostConstruct requires a synchronous client outside Netty. -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>url-connection-client</artifactId>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  RESILIENCE4J — fault tolerance                     │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- Reactor operators: .transformDeferred(CircuitBreakerOperator) -->
-        <dependency>
-            <groupId>io.github.resilience4j</groupId>
-            <artifactId>resilience4j-reactor</artifactId>
-            <version>${resilience4j.version}</version>
-        </dependency>
-
-        <!-- Spring Boot 3/4 auto-config for @CircuitBreaker, @Retry -->
-        <dependency>
-            <groupId>io.github.resilience4j</groupId>
-            <artifactId>resilience4j-spring-boot3</artifactId>
-            <version>${resilience4j.version}</version>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  SHEDLOCK — distributed scheduler lock              │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- Prevents N ECS instances from running the scheduler N times.
-             Only ONE instance executes the expiration job per cycle. -->
-        <dependency>
-            <groupId>net.javacrumbs.shedlock</groupId>
-            <artifactId>shedlock-spring</artifactId>
-            <version>${shedlock.version}</version>
-        </dependency>
-
-        <!-- DynamoDB provider for ShedLock — uses emp-shedlock table -->
-        <dependency>
-            <groupId>net.javacrumbs.shedlock</groupId>
-            <artifactId>shedlock-provider-dynamodb2</artifactId>
-            <version>${shedlock.version}</version>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  OBSERVABILITY                                       │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- Prometheus — exposes metrics at /actuator/prometheus
-             for Grafana / CloudWatch in production -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus</artifactId>
-        </dependency>
-
-        <!-- Logstash encoder — structured JSON logs with correlationId,
-             orderId, userId for CloudWatch / ELK in production -->
-        <dependency>
-            <groupId>net.logstash.logback</groupId>
-            <artifactId>logstash-logback-encoder</artifactId>
-            <version>${logstash.encoder.version}</version>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  SERIALIZATION                                       │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- Jackson JSR310 — java.time support for AWS SDK and legacy libs -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  MAPSTRUCT — compile-time mappers                   │
-             └─────────────────────────────────────────────────────┘ -->
-        <dependency>
-            <groupId>org.mapstruct</groupId>
-            <artifactId>mapstruct</artifactId>
-            <version>${mapstruct.version}</version>
-        </dependency>
-
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  LOMBOK — boilerplate reduction (compile only)      │
-             └─────────────────────────────────────────────────────┘ -->
+        <!-- Lombok — boilerplate reduction (compile only) -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
 
-        <!-- ┌─────────────────────────────────────────────────────┐
-             │  TEST                                                │
-             └─────────────────────────────────────────────────────┘ -->
-
-        <!-- JUnit 5 + Mockito + AssertJ — core test framework.
-             Transitively includes spring-boot-test-autoconfigure. -->
+        <!-- JUnit 5 + Mockito + AssertJ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- WebFlux test slice — @WebFluxTest support.
-             New package in Boot 4: org.springframework.boot.webflux.test.autoconfigure -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-webflux-test</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -256,201 +145,141 @@
             <artifactId>reactor-test</artifactId>
             <scope>test</scope>
         </dependency>
-
-        <!-- Testcontainers JUnit 5 integration -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- LocalStack — emulates DynamoDB + SQS for integration tests -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>localstack</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- Spring Boot Testcontainers integration -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-testcontainers</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- Awaitility — fluent async assertions for SQS consumer tests -->
-        <dependency>
-            <groupId>org.awaitility</groupId>
-            <artifactId>awaitility</artifactId>
-            <scope>test</scope>
-        </dependency>
-
     </dependencies>
 
     <!-- ══════════════════════════════════════════════════════════
-         BUILD PLUGINS
+         BUILD PLUGINS — inherited by all child modules
          ══════════════════════════════════════════════════════════ -->
     <build>
-        <plugins>
+        <pluginManagement>
+            <plugins>
+                <!-- Java 25 compiler with Lombok → MapStruct processor order -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.15.0</version>
+                    <configuration>
+                        <source>25</source>
+                        <target>25</target>
+                        <release>25</release>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </path>
+                            <path>
+                                <groupId>org.mapstruct</groupId>
+                                <artifactId>mapstruct-processor</artifactId>
+                                <version>${mapstruct.version}</version>
+                            </path>
+                            <path>
+                                <groupId>org.springframework.boot</groupId>
+                                <artifactId>spring-boot-configuration-processor</artifactId>
+                            </path>
+                        </annotationProcessorPaths>
+                    </configuration>
+                </plugin>
 
-            <!-- ┌───────────────────────────────────────────────────┐
-                 │  COMPILER — UPDATED to 3.15.0 for Java 25 support │
-                 │  Annotation processors in correct order:          │
-                 │  Lombok FIRST, then MapStruct, then config proc   │
-                 └───────────────────────────────────────────────────┘ -->
+                <!-- Surefire — unit tests (*Test.java) -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <argLine>@{argLine}</argLine>
+                        <includes>
+                            <include>**/*Test.java</include>
+                            <include>**/*Tests.java</include>
+                        </includes>
+                        <excludes>
+                            <exclude>**/*IT.java</exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+
+                <!-- Failsafe — integration tests (*IT.java, requires Docker) -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <configuration>
+                        <!-- Docker 29+ requires API version >= 1.40; Testcontainers shaded docker-java
+                             uses the 'api.version' JVM system property for the API version override -->
+                        <argLine>@{argLine} -Dapi.version=1.41</argLine>
+                        <includes>
+                            <include>**/*IT.java</include>
+                        </includes>
+                        <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>integration-test</goal>
+                                <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- JaCoCo — ≥90% line, ≥85% branch -->
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>0.8.13</version>
+                    <executions>
+                        <execution>
+                            <id>prepare-agent</id>
+                            <goals><goal>prepare-agent</goal></goals>
+                        </execution>
+                        <execution>
+                            <id>report</id>
+                            <phase>verify</phase>
+                            <goals><goal>report</goal></goals>
+                        </execution>
+                        <execution>
+                            <id>check-coverage</id>
+                            <phase>verify</phase>
+                            <goals><goal>check</goal></goals>
+                            <configuration>
+                                <rules>
+                                    <rule>
+                                        <element>BUNDLE</element>
+                                        <limits>
+                                            <limit>
+                                                <counter>LINE</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${jacoco.minimum.line.coverage}</minimum>
+                                            </limit>
+                                            <limit>
+                                                <counter>BRANCH</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${jacoco.minimum.branch.coverage}</minimum>
+                                            </limit>
+                                        </limits>
+                                    </rule>
+                                </rules>
+                                <excludes>
+                                    <exclude>**/config/**</exclude>
+                                    <exclude>**/*Application*</exclude>
+                                    <exclude>**/dto/**</exclude>
+                                    <exclude>**/entity/**</exclude>
+                                    <exclude>**/router/**</exclude>
+                                    <exclude>**/filter/**</exclude>
+                                </excludes>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+        <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.15.0</version>  <!-- 👈 ADDED for Java 25 support -->
-                <configuration>
-                    <source>25</source>
-                    <target>25</target>
-                    <release>25</release>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </path>
-                        <path>
-                            <groupId>org.mapstruct</groupId>
-                            <artifactId>mapstruct-processor</artifactId>
-                            <version>${mapstruct.version}</version>
-                        </path>
-                        <path>
-                            <groupId>org.springframework.boot</groupId>
-                            <artifactId>spring-boot-configuration-processor</artifactId>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
             </plugin>
-
-            <!-- ┌───────────────────────────────────────────────────┐
-                 │  SPRING BOOT — executable fat JAR                  │
-                 │  Excludes Lombok from final artifact (compile only) │
-                 └───────────────────────────────────────────────────┘ -->
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <excludes>
-                        <exclude>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
-
-            <!-- ┌───────────────────────────────────────────────────┐
-                 │  SUREFIRE — JUnit 5 unit test execution            │
-                 │  argLine with @{argLine} for JaCoCo injection      │
-                 └───────────────────────────────────────────────────┘ -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <argLine>@{argLine}</argLine>
-                    <!-- Unit tests only — no Spring context, no Docker required -->
-                    <includes>
-                        <include>**/*Test.java</include>
-                        <include>**/*Tests.java</include>
-                    </includes>
-                    <excludes>
-                        <exclude>**/*IT.java</exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
-
-            <!-- ┌───────────────────────────────────────────────────┐
-                 │  FAILSAFE — integration tests (*IT.java)           │
-                 │  Requires Docker (LocalStack via Testcontainers)   │
-                 │  Runs on: ./mvnw verify  (not ./mvnw test)         │
-                 └───────────────────────────────────────────────────┘ -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-failsafe-plugin</artifactId>
-                <configuration>
-                    <argLine>@{argLine}</argLine>
-                    <includes>
-                        <include>**/*IT.java</include>
-                    </includes>
-                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>integration-test</goal>
-                            <goal>verify</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- ┌───────────────────────────────────────────────────┐
-                 │  JACOCO — mandatory coverage thresholds            │
-                 │  Line: 80% | Branch: 70%  (UPDATED)                │
-                 │  Fails the build if thresholds are not met.        │
-                 └───────────────────────────────────────────────────┘ -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.13</version>
-                <executions>
-                    <execution>
-                        <id>prepare-agent</id>
-                        <goals>
-                            <goal>prepare-agent</goal>
-                        </goals>
-                    </execution>
-                    <execution>
-                        <id>report</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>report</goal>
-                        </goals>
-                    </execution>
-                    <execution>
-                        <id>check-coverage</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>check</goal>
-                        </goals>
-                        <configuration>
-                            <rules>
-                                <rule>
-                                    <element>BUNDLE</element>
-                                    <limits>
-                                        <limit>
-                                            <counter>LINE</counter>
-                                            <value>COVEREDRATIO</value>
-                                            <minimum>${jacoco.minimum.line.coverage}</minimum>
-                                        </limit>
-                                        <limit>
-                                            <counter>BRANCH</counter>
-                                            <value>COVEREDRATIO</value>
-                                            <minimum>${jacoco.minimum.branch.coverage}</minimum>
-                                        </limit>
-                                    </limits>
-                                </rule>
-                            </rules>
-                            <excludes>
-                                <exclude>**/config/**</exclude>
-                                <exclude>**/entity/**</exclude>
-                                <exclude>**/*Application*</exclude>
-                                <exclude>**/dto/**</exclude>
-                                <exclude>**/mapper/**</exclude>
-                                <exclude>**/shared/logging/**</exclude>
-                                <exclude>**/scheduler/**</exclude>
-                                <exclude>**/persistence/dynamodb/repository/**</exclude>
-                                <exclude>**/messaging/sqs/**</exclude>
-                                <exclude>**/web/filter/**</exclude>
-                                <exclude>**/web/router/**</exclude>
-                            </excludes>
-                        </configuration>
-                    </execution>
-                </executions>
             </plugin>
-
         </plugins>
     </build>
 

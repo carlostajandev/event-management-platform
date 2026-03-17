@@ -1,0 +1,614 @@
+{
+  "info": {
+    "name": "Event Management Platform v2",
+    "description": "Complete API collection for the 4-microservice ticketing platform. Run against local Docker Compose stack (LocalStack + 4 services).\n\nBase URLs:\n- event-service:       http://localhost:8081\n- reservation-service: http://localhost:8082\n- order-service:       http://localhost:8083\n- consumer-service:    http://localhost:8084 (no public API)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "2.0.0"
+  },
+  "variable": [
+    { "key": "eventServiceUrl",       "value": "http://localhost:8081" },
+    { "key": "reservationServiceUrl", "value": "http://localhost:8082" },
+    { "key": "orderServiceUrl",       "value": "http://localhost:8083" },
+    { "key": "eventId",               "value": "" },
+    { "key": "reservationId",         "value": "" },
+    { "key": "orderId",               "value": "" },
+    { "key": "userId",                "value": "u_test_001" },
+    { "key": "correlationId",         "value": "{{$guid}}" },
+    { "key": "idempotencyKey",        "value": "{{$guid}}" }
+  ],
+  "item": [
+    {
+      "name": "1 — Event Service",
+      "item": [
+        {
+          "name": "Create Event",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has eventId', () => pm.expect(body.eventId).to.be.a('string'));",
+                  "pm.collectionVariables.set('eventId', body.eventId);",
+                  "console.log('eventId saved:', body.eventId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{eventServiceUrl}}/api/v1/events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Coldplay - Music of the Spheres World Tour\",\n  \"description\": \"One of the most iconic bands of this generation returns to Colombia\",\n  \"venue\": {\n    \"name\": \"Estadio El Campín\",\n    \"city\": \"Bogotá\",\n    \"country\": \"Colombia\",\n    \"capacity\": 45000\n  },\n  \"eventDate\": \"2026-09-15T20:00:00Z\",\n  \"ticketPrice\": 350000,\n  \"currency\": \"COP\",\n  \"totalCapacity\": 1000\n}"
+            }
+          }
+        },
+        {
+          "name": "Get All Events",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{eventServiceUrl}}/api/v1/events"
+          }
+        },
+        {
+          "name": "Get Event by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has availableCount', () => pm.expect(body.availableCount).to.be.a('number'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{eventServiceUrl}}/api/v1/events/{{eventId}}"
+          }
+        },
+        {
+          "name": "Get Event Availability",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has availableCount', () => pm.expect(body.availableCount).to.be.a('number'));",
+                  "console.log('Available tickets:', body.availableCount);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{eventServiceUrl}}/api/v1/events/{{eventId}}/availability"
+          }
+        },
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('UP', () => pm.expect(pm.response.json().status).to.equal('UP'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{eventServiceUrl}}/actuator/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — Reservation Service",
+      "item": [
+        {
+          "name": "Reserve Tickets (Happy Path)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status ACTIVE', () => pm.expect(body.status).to.equal('ACTIVE'));",
+                  "pm.test('Has expiresAt', () => pm.expect(body.expiresAt).to.be.a('string'));",
+                  "pm.collectionVariables.set('reservationId', body.reservationId);",
+                  "console.log('reservationId saved:', body.reservationId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{reservationServiceUrl}}/api/v1/reservations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"userId\": \"{{userId}}\",\n  \"seatsCount\": 2\n}"
+            }
+          }
+        },
+        {
+          "name": "Reserve Tickets — Exceeds Max (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Validation error', () => pm.expect(pm.response.json().error).to.equal('Bad Request'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{reservationServiceUrl}}/api/v1/reservations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"userId\": \"{{userId}}\",\n  \"seatsCount\": 11\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Reservation by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has reservationId', () => pm.expect(pm.response.json().reservationId).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{reservationServiceUrl}}/api/v1/reservations/{{reservationId}}"
+          }
+        },
+        {
+          "name": "Get User Reservations",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{reservationServiceUrl}}/api/v1/reservations/user/{{userId}}"
+          }
+        },
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('UP', () => pm.expect(pm.response.json().status).to.equal('UP'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{reservationServiceUrl}}/actuator/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 — Order Service",
+      "item": [
+        {
+          "name": "Create Order (Happy Path)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status PENDING', () => pm.expect(body.status).to.equal('PENDING'));",
+                  "pm.collectionVariables.set('orderId', body.orderId);",
+                  "console.log('orderId saved:', body.orderId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Idempotency-Key", "value": "{{idempotencyKey}}" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservationId\": \"{{reservationId}}\",\n  \"userId\": \"{{userId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Order — Same Idempotency Key (200 cached)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 (cached) or 201', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('Same orderId returned', () => pm.expect(body.orderId).to.equal(pm.collectionVariables.get('orderId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Idempotency-Key", "value": "{{idempotencyKey}}" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservationId\": \"{{reservationId}}\",\n  \"userId\": \"{{userId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Order — Missing Idempotency Key (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservationId\": \"{{reservationId}}\",\n  \"userId\": \"{{userId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Order by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has orderId', () => pm.expect(body.orderId).to.be.a('string'));",
+                  "console.log('Order status:', body.status);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders/{{orderId}}"
+          }
+        },
+        {
+          "name": "Get User Orders",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders/user/{{userId}}"
+          }
+        },
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('UP', () => pm.expect(pm.response.json().status).to.equal('UP'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{orderServiceUrl}}/actuator/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 — Full Purchase Flow (Run in Order)",
+      "description": "Execute these requests in sequence to test the full happy path: create event → reserve tickets → create order → verify order confirmed (async via consumer-service).",
+      "item": [
+        {
+          "name": "Step 1: Create Event",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('eventId', pm.response.json().eventId);",
+                  "pm.collectionVariables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{$guid}}" }
+            ],
+            "url": "{{eventServiceUrl}}/api/v1/events",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Full Flow Test Event\",\n  \"description\": \"Test event for full purchase flow\",\n  \"venue\": {\n    \"name\": \"Test Venue\",\n    \"city\": \"Bogotá\",\n    \"country\": \"Colombia\",\n    \"capacity\": 1000\n  },\n  \"eventDate\": \"2026-12-31T23:00:00Z\",\n  \"ticketPrice\": 100000,\n  \"currency\": \"COP\",\n  \"totalCapacity\": 100\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 2: Reserve Tickets",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status ACTIVE', () => pm.expect(body.status).to.equal('ACTIVE'));",
+                  "pm.collectionVariables.set('reservationId', body.reservationId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{reservationServiceUrl}}/api/v1/reservations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"userId\": \"{{userId}}\",\n  \"seatsCount\": 2\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 3: Create Order",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status PENDING', () => pm.expect(body.status).to.equal('PENDING'));",
+                  "pm.collectionVariables.set('orderId', body.orderId);",
+                  "console.log('Order created. Wait ~10s then check Step 4 for CONFIRMED status.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Idempotency-Key", "value": "{{idempotencyKey}}" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservationId\": \"{{reservationId}}\",\n  \"userId\": \"{{userId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 4: Poll Order Status (expect CONFIRMED after ~10s)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const status = body.status;",
+                  "console.log('Current order status:', status);",
+                  "pm.test('Order processed (PENDING or CONFIRMED)', () => {",
+                  "  pm.expect(status).to.be.oneOf(['PENDING', 'CONFIRMED']);",
+                  "});",
+                  "if (status === 'CONFIRMED') {",
+                  "  console.log('Full flow complete! Order CONFIRMED by consumer-service.');",
+                  "} else {",
+                  "  console.log('Order still PENDING. consumer-service outbox poller runs every 5s. Re-run this request.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{orderServiceUrl}}/api/v1/orders/{{orderId}}"
+          }
+        },
+        {
+          "name": "Step 5: Verify Ticket Inventory Decremented",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log('Available tickets after purchase:', body.availableCount);",
+                  "pm.test('Tickets decremented', () => pm.expect(body.availableCount).to.be.lessThan(100));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" }
+            ],
+            "url": "{{eventServiceUrl}}/api/v1/events/{{eventId}}/availability"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 — Observability",
+      "item": [
+        {
+          "name": "event-service — Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{eventServiceUrl}}/actuator/prometheus"
+          }
+        },
+        {
+          "name": "reservation-service — Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{reservationServiceUrl}}/actuator/prometheus"
+          }
+        },
+        {
+          "name": "order-service — Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{orderServiceUrl}}/actuator/prometheus"
+          }
+        },
+        {
+          "name": "All Services — Health Checks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('event-service UP', () => pm.expect(pm.response.json().status).to.equal('UP'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{eventServiceUrl}}/actuator/health"
+          }
+        }
+      ]
+    }
+  ]
+}

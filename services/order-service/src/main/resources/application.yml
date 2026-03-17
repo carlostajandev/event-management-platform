@@ -1,0 +1,63 @@
+spring:
+  application:
+    name: order-service
+  profiles:
+    active: local
+  threads:
+    virtual:
+      enabled: true  # Java 25 Virtual Threads for blocking adapter layers
+
+server:
+  port: 8083
+
+aws:
+  region: us-east-1
+  dynamodb:
+    endpoint: http://localhost:4566
+    table:
+      orders: emp-orders
+      outbox: emp-outbox
+      idempotency: emp-idempotency-keys
+      audit: emp-audit
+  sqs:
+    endpoint: http://localhost:4566
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+logging:
+  level:
+    com.nequi: DEBUG
+    software.amazon.awssdk: WARN
+    reactor.netty: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      dynamodb:
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        permitted-number-of-calls-in-half-open-state: 5
+        sliding-window-type: COUNT_BASED
+        register-health-indicator: true
+  retry:
+    instances:
+      dynamodb:
+        max-attempts: 3
+        wait-duration: 100ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - software.amazon.awssdk.core.exception.SdkClientException

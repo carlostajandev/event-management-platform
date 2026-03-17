@@ -1,122 +1,134 @@
-# AWS Production Architecture
+# AWS Production Architecture — Microservices v2
 
-## Full Infrastructure Diagram
+## Infrastructure Overview
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                          AWS Cloud (us-east-1)                                │
-│                                                                               │
-│  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │                     VPC: 10.0.0.0/16                                    │ │
-│  │                                                                         │ │
-│  │  ┌──────────────────────────── PUBLIC SUBNETS ───────────────────────┐  │ │
-│  │  │                                                                   │  │ │
-│  │  │  10.0.1.0/24 (AZ-1a)   10.0.2.0/24 (AZ-1b)   10.0.3.0/24 (AZ-1c)│  │ │
-│  │  │  ┌─────────────────────────────────────────────────────────────┐  │  │ │
-│  │  │  │               Application Load Balancer                    │  │  │ │
-│  │  │  │  Port 443 (HTTPS)  ·  TLS 1.3  ·  ACM Certificate         │  │  │ │
-│  │  │  │  Port 80 → redirect 443                                    │  │  │ │
-│  │  │  │  Health check: GET /actuator/health → 200                  │  │  │ │
-│  │  │  └─────────────┬─────────────────────────────────────────────┘  │  │ │
-│  │  │                │                                                  │  │ │
-│  │  │  ┌─────────────▼──┐   ┌──────────────┐                          │  │ │
-│  │  │  │  NAT Gateway   │   │Internet GW   │                          │  │ │
-│  │  │  │  (AZ-1a)       │   │              │                          │  │ │
-│  │  │  └─────────────┬──┘   └──────────────┘                          │  │ │
-│  │  └────────────────┼───────────────────────────────────────────────-─┘  │ │
-│  │                   │                                                      │ │
-│  │  ┌────────────────┼──────────── PRIVATE SUBNETS ────────────────────┐   │ │
-│  │  │                ▼                                                  │   │ │
-│  │  │  10.0.10.0/24 (AZ-1a)  10.0.20.0/24 (AZ-1b)  10.0.30.0/24 (1c) │   │ │
-│  │  │                                                                   │   │ │
-│  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │   │ │
-│  │  │  │ECS Fargate  │  │ECS Fargate  │  │ECS Fargate  │              │   │ │
-│  │  │  │Spring Boot 4│  │Spring Boot 4│  │Spring Boot 4│              │   │ │
-│  │  │  │Java 21 LTS  │  │Java 21 LTS  │  │Java 21 LTS  │              │   │ │
-│  │  │  │512 CPU      │  │512 CPU      │  │512 CPU      │              │   │ │
-│  │  │  │1024 MB RAM  │  │1024 MB RAM  │  │1024 MB RAM  │              │   │ │
-│  │  │  │port: 8080   │  │port: 8080   │  │port: 8080   │              │   │ │
-│  │  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │   │ │
-│  │  │         └────────────────┼─────────────────┘                     │   │ │
-│  │  │                          │                                        │   │ │
-│  │  │              ┌───────────┴────────────┐                          │   │ │
-│  │  │              │ VPC Endpoints          │                          │   │ │
-│  │  │         ┌────┴──────────┐   ┌─────────┴────┐                    │   │ │
-│  │  │         │   DynamoDB   │   │     SQS      │                    │   │ │
-│  │  │         │ (Gateway EP) │   │ (Interface)  │                    │   │ │
-│  │  │         └──────────────┘   └──────────────┘                    │   │ │
-│  │  │         ┌──────────────┐   ┌──────────────┐                    │   │ │
-│  │  │         │ ECR API (If) │   │CloudWatch(If)│                    │   │ │
-│  │  │         └──────────────┘   └──────────────┘                    │   │ │
-│  │  └───────────────────────────────────────────────────────────────-─┘   │ │
-│  └─────────────────────────────────────────────────────────────────────────┘ │
-│                                                                               │
-│  ┌───────────────────┐  ┌──────────────────┐  ┌────────────────────────┐    │
-│  │     DynamoDB      │  │      SQS         │  │   Secrets Manager      │    │
-│  │  emp-events       │  │  purchase-orders │  │  emp/prod/db-password  │    │
-│  │  emp-tickets(GSI) │  │  purchase-orders │  │  emp/prod/api-key      │    │
-│  │  emp-orders (GSI) │  │  -dlq            │  └────────────────────────┘    │
-│  │  emp-idempotency  │  └──────────────────┘                                │
-│  │  emp-audit        │  ┌──────────────────┐  ┌────────────────────────┐    │
-│  │  emp-shedlock     │  │  CloudWatch Logs │  │   ECR Repository       │    │
-│  └───────────────────┘  │  /ecs/emp-prod   │  │  emp:latest            │    │
-│                          └──────────────────┘  └────────────────────────┘    │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+```mermaid
+graph TB
+    Internet([Internet])
 
-## Security Groups
+    subgraph "AWS Cloud — us-east-1"
+        subgraph "Public Subnets"
+            ALB[Application Load Balancer<br/>HTTPS:443]
+        end
 
-```
-ALB Security Group (emp-prod-alb-sg):
-  Inbound:  443 TCP from 0.0.0.0/0 (HTTPS from internet)
-            80  TCP from 0.0.0.0/0 (HTTP redirect)
-  Outbound: ALL
+        subgraph "Private Subnets — ECS Fargate"
+            ES[event-service<br/>:8081]
+            RS[reservation-service<br/>:8082]
+            OS[order-service<br/>:8083]
+            CS[consumer-service<br/>:8084]
+        end
 
-ECS Tasks Security Group (emp-prod-ecs-sg):
-  Inbound:  8080 TCP from ALB SG only (no direct internet access)
-  Outbound: ALL (VPC endpoints + NAT for external)
+        subgraph "DynamoDB (6 tables)"
+            DDB1[emp-events<br/>atomic counter]
+            DDB2[emp-reservations<br/>TTL 10min]
+            DDB3[emp-orders<br/>order state]
+            DDB4[emp-outbox<br/>TTL 24h]
+            DDB5[emp-idempotency-keys<br/>TTL 24h]
+            DDB6[emp-audit<br/>TTL 90d]
+        end
 
-VPC Endpoints Security Group (emp-prod-vpc-endpoints-sg):
-  Inbound:  443 TCP from ECS Tasks SG only
-  Outbound: (managed by AWS)
+        subgraph "SQS"
+            Q1[emp-purchase-orders<br/>visibility=30s<br/>longPoll=20s]
+            DLQ[emp-purchase-orders-dlq<br/>after 3 failures]
+        end
+
+        CW[CloudWatch Logs<br/>Structured JSON]
+        IAM[IAM Task Role<br/>least-privilege]
+        ECR[ECR<br/>4 images]
+    end
+
+    Internet --> ALB
+    ALB --> ES
+    ALB --> RS
+    ALB --> OS
+
+    ES --> DDB1
+    RS --> DDB1
+    RS --> DDB2
+    RS --> DDB6
+    OS --> DDB3
+    OS --> DDB4
+    OS --> DDB5
+    OS --> DDB6
+
+    CS --> DDB3
+    CS --> DDB4
+    CS --> DDB2
+    CS --> DDB6
+    CS --> Q1
+    Q1 --> CS
+    Q1 -.->|3 failures| DLQ
+
+    ES --> CW
+    RS --> CW
+    OS --> CW
+    CS --> CW
+
+    IAM --> ES
+    IAM --> RS
+    IAM --> OS
+    IAM --> CS
+    ECR --> ES
+    ECR --> RS
+    ECR --> OS
+    ECR --> CS
 ```
 
-## IAM Architecture
+## Why Each AWS Service
+
+| Requirement | Solution | Rationale |
+|---|---|---|
+| No overselling | DynamoDB conditional writes | Atomic operation at DB level, no distributed lock needed |
+| Zero zombie orders | DynamoDB TransactWriteItems | Outbox + order written atomically or not at all |
+| Reservation expiry | DynamoDB TTL + Streams | O(1), zero compute, scales to millions free |
+| At-least-once delivery | SQS Standard + DLQ | Consumer idempotent, 3 retries then DLQ for monitoring |
+| High concurrency | ECS Fargate auto-scaling | Scale 2→20 tasks in 60s based on CPU/SQS depth |
+| Zero-downtime deploy | ECS rolling update | 50% min healthy, 200% max during deploy |
+| Financial data integrity | DynamoDB PITR | Point-in-time recovery for 35 days |
+| No static credentials | ECS Task IAM Role | DefaultCredentialsProvider reads role automatically |
+| Observability | CloudWatch + Prometheus | Structured JSON logs + Micrometer metrics |
+
+## IAM Least Privilege (Terraform managed)
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                     IAM Architecture                              │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  Task Execution Role (emp-prod-ecs-execution-role)           │ │
-│  │  Used by: ECS control plane (not the application)            │ │
-│  │                                                              │ │
-│  │  · AmazonECSTaskExecutionRolePolicy (managed)                │ │
-│  │    → ecr:GetAuthorizationToken                               │ │
-│  │    → ecr:BatchGetImage, ecr:GetDownloadUrlForLayer           │ │
-│  │    → logs:CreateLogStream, logs:PutLogEvents                 │ │
-│  │  · secretsmanager:GetSecretValue                             │ │
-│  │    → Resource: arn:aws:secretsmanager:*:*:secret:emp-prod/*  │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  Task Role (emp-prod-ecs-task-role)                          │ │
-│  │  Used by: Spring Boot application at runtime                 │ │
-│  │                                                              │ │
-│  │  DynamoDB policy:                                            │ │
-│  │  · Actions: GetItem, PutItem, UpdateItem, DeleteItem,        │ │
-│  │             Query, Scan, BatchWriteItem, DescribeTable        │ │
-│  │  · Resources: arn:aws:dynamodb:*:*:table/emp-prod-*          │ │
-│  │               arn:aws:dynamodb:*:*:table/emp-prod-*/index/*  │ │
-│  │                                                              │ │
-│  │  SQS policy:                                                 │ │
-│  │  · Actions: SendMessage, ReceiveMessage,                     │ │
-│  │             DeleteMessage, GetQueueAttributes                 │ │
-│  │  · Resources: arn:aws:sqs:*:*:emp-prod-purchase-orders       │ │
-│  │                                                              │ │
-│  │  X-Ray policy:                                               │ │
-│  │  · Actions: PutTraceSegments, PutTelemetryRecords            │ │
-│  │  · Resources: * (X-Ray requires wildcard)                    │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+ECS Task Role → Policy:
+  DynamoDB:
+    GetItem, PutItem, UpdateItem, DeleteItem, Query
+    on arn:aws:dynamodb:*:*:table/emp-*
+    on arn:aws:dynamodb:*:*:table/emp-*/index/*
+
+  SQS:
+    SendMessage, ReceiveMessage, DeleteMessage, GetQueueAttributes
+    on arn:aws:sqs:*:*:emp-purchase-orders*
+
+  CloudWatch Logs:
+    CreateLogGroup, CreateLogStream, PutLogEvents
+    on arn:aws:logs:*:*:log-group:/ecs/emp-*
 ```
+
+## Deployment Flow (CI/CD)
+
+```
+Push to main ──→ GitHub Actions ──→ Build + Test (./mvnw test)
+                                  ──→ Docker build × 4 services
+                                  ──→ Push to ECR
+                                  ──→ Terraform plan
+                                  ──→ [Manual approval]
+                                  ──→ Terraform apply
+                                  ──→ ECS rolling update
+                                  ──→ Health check /actuator/health
+```
+
+## Cost Estimate (staging — 2 tasks per service)
+
+| Resource | Config | Monthly |
+|---|---|---|
+| ECS Fargate (8 tasks × 0.5vCPU/1GB) | always-on | ~$65 |
+| DynamoDB (6 tables, PAY_PER_REQUEST) | light load | ~$5 |
+| SQS (2 queues) | light load | ~$1 |
+| ALB | 1 instance | ~$20 |
+| NAT Gateway | 1 AZ | ~$35 |
+| ECR (4 repos) | storage | ~$2 |
+| **Total** | | **~$128/month** |
+
+Production: add auto-scaling, multi-AZ NAT, CloudFront → ~$200-400/month depending on traffic.

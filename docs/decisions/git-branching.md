@@ -1,98 +1,122 @@
-# Git Branching Strategy
+# Git Branching Strategy — Microservices v2
 
-## Modelo: GitHub Flow con feature branches
+## Model: GitHub Flow with feature branches
 
-Cada feature de la plataforma vive en su propia rama, desarrollada contra `develop`.
+All work targets `main` via short-lived feature branches. The v2 monorepo lives in `feat/microservices-mono-repo-architecture-v2`, merged to `main` as the new baseline.
 
-## Estructura de ramas
+## Branch Structure
 
 ```
 main
- └── develop
-      ├── feature/TICK-001-project-setup
-      ├── feature/TICK-002-event-management
-      ├── feature/TICK-003-ticket-inventory
-      ├── feature/TICK-004-ticket-reservation
-      ├── feature/TICK-005-purchase-order-processing
-      ├── feature/TICK-006-order-status-query
-      ├── feature/TICK-007-expired-reservation-release
-      ├── feature/TICK-008-reactive-availability-endpoint
-      ├── feature/TICK-009-global-error-handler
-      ├── feature/TICK-010-observability
-      ├── feature/TICK-011-integration-tests
-      ├── hotfix/TICK-XXX-descripcion
-      └── chore/TICK-XXX-descripcion
+ ├── feat/microservices-mono-repo-architecture-v2   ← v2 architecture baseline
+ ├── feature/TICK-{n}-{desc}
+ ├── hotfix/TICK-{n}-{desc}
+ └── chore/TICK-{n}-{desc}
 ```
 
-## Convención de nombres
+## Naming Convention
 
-| Tipo | Patrón | Ejemplo |
+| Type | Pattern | Example |
 |---|---|---|
-| `feature` | `feature/TICK-{n}-{desc}` | `feature/TICK-002-event-management` |
+| `feature` | `feature/TICK-{n}-{desc}` | `feature/TICK-012-jwt-authentication` |
 | `hotfix` | `hotfix/TICK-{n}-{desc}` | `hotfix/TICK-099-fix-oversell` |
 | `chore` | `chore/TICK-{n}-{desc}` | `chore/TICK-015-upgrade-aws-sdk` |
-| `refactor` | `refactor/TICK-{n}-{desc}` | `refactor/TICK-020-extract-service` |
+| `refactor` | `refactor/TICK-{n}-{desc}` | `refactor/TICK-020-write-sharding` |
 | `docs` | `docs/TICK-{n}-{desc}` | `docs/TICK-030-architecture` |
 
-**Reglas:**
-- Siempre `kebab-case` (minúsculas, guiones)
-- Siempre con ID de ticket `TICK-{n}`
-- Descripción máximo 5 palabras
+**Rules:**
+- Always `kebab-case` (lowercase, hyphens)
+- Always include ticket ID `TICK-{n}`
+- Description max 5 words
 
-## Convención de commits
+## Commit Convention
 
 ```
-<tipo>(scope): <descripción corta>
+<type>(scope): <short description>
 
-[cuerpo opcional]
+[optional body]
 
 TICK-XXX
 ```
 
-**Tipos:** `feat` · `fix` · `test` · `refactor` · `chore` · `docs` · `perf`
+**Types:** `feat` · `fix` · `test` · `refactor` · `chore` · `docs` · `perf` · `ci`
 
-**Ejemplos:**
+**Scopes:** `event-svc` · `reservation-svc` · `order-svc` · `consumer-svc` · `shared` · `infra` · `ci`
+
+**Examples:**
 ```
-feat(event): add CreateEventUseCase with DynamoDB adapter
+feat(reservation-svc): add conditional write retry with exponential backoff
 
-TICK-002
+Uses reactor.util.retry.Retry.backoff(3, 100ms) to handle concurrent
+DynamoDB conditional check failures (ConcurrentModificationException).
+
+TICK-013
 
 ---
 
-fix(reservation): prevent race condition in concurrent ticket reservation
+fix(consumer-svc): replace SqsMessageDeletionPolicy with ON_SUCCESS ack mode
 
-Two concurrent requests could bypass the version check.
-Added stronger ConditionExpression: version + status.
+Spring Cloud AWS 3.x removed SqsMessageDeletionPolicy enum.
+Replaced with acknowledgementMode = SqsListenerAcknowledgementMode.ON_SUCCESS.
 
-TICK-004
+TICK-014
+
+---
+
+ci: add multi-service build matrix for 4 microservices
+
+TICK-015
 ```
 
-## Flujo PR
+## PR Flow
 
 ```
-feature/TICK-XXX  ──► develop  ──► main
+feature/TICK-XXX  ──► main
 ```
 
-1. Abrir PR: `feature/TICK-XXX` → `develop`
-2. Checks requeridos: tests ✅ · cobertura ≥ 90% ✅ · 1 aprobación ✅
-3. Squash merge con mensaje descriptivo
-4. Borrar rama feature después del merge
+1. Open PR: `feature/TICK-XXX` → `main`
+2. Required checks: all 4 service tests ✅ · JaCoCo ≥90% line / ≥85% branch ✅ · Docker build ✅ · 1 approval ✅
+3. Squash merge with descriptive message
+4. Delete feature branch after merge
 
-## Comandos del día a día
+## Daily Commands
 
 ```bash
-# Iniciar feature
-git checkout develop && git pull origin develop
-git checkout -b feature/TICK-002-event-management
+# Start feature
+git checkout main && git pull origin main
+git checkout -b feature/TICK-012-jwt-authentication
 
-# Trabajo diario
-git add . && git commit -m "feat(event): add Event domain record"
-git push origin feature/TICK-002-event-management
+# Daily work
+git add -p && git commit -m "feat(reservation-svc): add JWT filter"
+git push origin feature/TICK-012-jwt-authentication
 
-# Mantener sincronizado con develop
-git fetch origin && git rebase origin/develop
+# Keep in sync with main
+git fetch origin && git rebase origin/main
 
-# Después del merge del PR
-git checkout develop && git pull origin develop
-git branch -d feature/TICK-002-event-management
+# After PR merge
+git checkout main && git pull origin main
+git branch -d feature/TICK-012-jwt-authentication
 ```
+
+## Service Scope Tags
+
+When changes touch multiple services, list scopes:
+
+```
+feat(event-svc,shared): add Write Sharding support for high-demand events
+
+TICK-016
+```
+
+## Ticket Backlog — v2 Next Steps
+
+| Ticket | Scope | Priority |
+|---|---|---|
+| TICK-012 | JWT authentication (Spring Security + Cognito) | High |
+| TICK-013 | Rate limiting (WebFlux filter — 100 req/min/IP) | High |
+| TICK-014 | DynamoDB Streams + Lambda for expiry compensation | High |
+| TICK-015 | AWS X-Ray distributed tracing | Medium |
+| TICK-016 | Virtual waiting room (SQS queue for peak events) | Medium |
+| TICK-017 | CQRS read model with ElastiCache for availability | Medium |
+| TICK-018 | Contract testing with Pact | Medium |
+| TICK-019 | Canary deployments with CodeDeploy | Medium |

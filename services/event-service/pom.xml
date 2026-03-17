@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ══════════════════════════════════════════════════════════
+         PARENT — inherits Spring Boot 4 BOM, compiler config,
+         Surefire, Failsafe, and JaCoCo plugin management
+         ══════════════════════════════════════════════════════════ -->
+    <parent>
+        <groupId>com.nequi</groupId>
+        <artifactId>event-management-platform</artifactId>
+        <version>2.0.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <!-- ══════════════════════════════════════════════════════════
+         MODULE COORDINATES
+         ══════════════════════════════════════════════════════════ -->
+    <artifactId>event-service</artifactId>
+    <packaging>jar</packaging>
+    <name>event-service</name>
+    <description>
+        Event management microservice — Clean Architecture, WebFlux, DynamoDB.
+        Owns the Event aggregate: CRUD, availability queries, and ticket reservation.
+    </description>
+
+    <!-- ══════════════════════════════════════════════════════════
+         DEPENDENCIES
+         ══════════════════════════════════════════════════════════ -->
+    <dependencies>
+
+        <!-- ── Internal shared modules ───────────────────────────────────── -->
+        <dependency>
+            <groupId>com.nequi</groupId>
+            <artifactId>shared-domain</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nequi</groupId>
+            <artifactId>shared-infrastructure</artifactId>
+        </dependency>
+
+        <!-- ── Spring Boot / WebFlux ─────────────────────────────────────── -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- ── Observability ─────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- ── AWS SDK v2 — DynamoDB Enhanced Client ─────────────────────── -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb-enhanced</artifactId>
+        </dependency>
+
+        <!-- ── Resilience4j — Circuit Breaker + Retry for DynamoDB calls ─── -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-reactor</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+
+        <!-- ── JSON ──────────────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+
+        <!-- ── Structured logging (JSON to CloudWatch / ELK) ────────────── -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>${logstash.encoder.version}</version>
+        </dependency>
+
+        <!-- ── Test dependencies ──────────────────────────────────────────── -->
+        <!-- Testcontainers — JUnit 5 integration -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers — LocalStack module for DynamoDB integration tests -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>localstack</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Spring Boot Testcontainers support (@ServiceConnection) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Awaitility — async assertion in integration tests -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- WebTestClient — functional HTTP testing for WebFlux endpoints -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- ══════════════════════════════════════════════════════════
+         BUILD — Spring Boot repackage + inherited quality plugins
+         ══════════════════════════════════════════════════════════ -->
+    <build>
+        <plugins>
+            <!-- Spring Boot fat JAR — exclude Lombok from final artifact -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- Surefire — unit tests inherited from parent, activated here -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+
+            <!-- Failsafe — integration tests (*IT.java) with Docker/LocalStack -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+
+            <!-- JaCoCo — ≥90% line coverage, ≥85% branch coverage -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

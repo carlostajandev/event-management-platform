@@ -1,121 +1,105 @@
-# CI/CD Pipeline — GitHub Actions
+# CI/CD Pipeline — GitHub Actions (Microservices v2)
 
 ## Pipeline Overview
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        GitHub Actions Pipeline                          │
-│                      .github/workflows/ci-cd.yml                       │
-└────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    Push([git push / PR])
 
-TRIGGER: Pull Request (any branch → main or develop)
-─────────────────────────────────────────────────────
+    subgraph "On PR to main/develop"
+        B[Build & Test<br/>./mvnw test<br/>all 4 services]
+        TF_V[Terraform Validate<br/>fmt check + syntax]
+        DB[Docker Build<br/>× 4 images<br/>NO push]
+    end
 
-  ┌─────────────────────────┐    ┌─────────────────────────────────────┐
-  │     Build & Test        │    │        Terraform Validate           │
-  │  ─────────────────────  │    │  ─────────────────────────────────  │
-  │  ./mvnw verify          │    │  terraform fmt -check -recursive    │
-  │  65 tests               │    │  terraform init -backend=false      │
-  │  JaCoCo gate:           │    │  terraform validate                 │
-  │    line   ≥ 70%         │    │                                     │
-  │    branch ≥ 40%         │    │  ✓ No AWS credentials required      │
-  │  Duration: ~2 min       │    │  Duration: ~13s                     │
-  └─────────────────────────┘    └─────────────────────────────────────┘
-           ↑ both must pass before PR can merge
+    subgraph "On push to main"
+        B2[Build & Test]
+        COV[JaCoCo Coverage<br/>≥90% line<br/>≥85% branch]
+        DP[Docker Build + Push<br/>to ECR]
+        TF_P[Terraform Plan<br/>staging]
+    end
 
+    subgraph "On tag v*"
+        B3[Build + Test]
+        DP2[Docker Push<br/>tagged image]
+        APP[Manual Approval<br/>required for prod]
+        TF_A[Terraform Apply<br/>production]
+        HC[Health Check<br/>/actuator/health<br/>× 4 services]
+    end
 
-TRIGGER: Push to main
-──────────────────────
-
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  Build & Test + Terraform Validate (same as above)              │
-  └─────────────────────────────────┬───────────────────────────────┘
-                                    │ both pass
-                                    ▼
-  ┌─────────────────────────────────────────────────────────────────┐
-  │                    Docker Build & Push                          │
-  │  ─────────────────────────────────────────────────────────────  │
-  │  1. ./mvnw package -DskipTests                                  │
-  │  2. docker build . -t emp:sha-{commit}                         │
-  │  3. aws ecr get-login-password | docker login                  │
-  │  4. docker push {account}.dkr.ecr.us-east-1.amazonaws.com/emp  │
-  │                                                                 │
-  │  Tags generated:                                                │
-  │    · sha-abc1234 (commit SHA)                                   │
-  │    · main (branch name)                                         │
-  └─────────────────────────────────┬───────────────────────────────┘
-                                    │
-                                    ▼
-  ┌─────────────────────────────────────────────────────────────────┐
-  │                   Terraform Plan (staging)                      │
-  │  ─────────────────────────────────────────────────────────────  │
-  │  terraform init                                                 │
-  │  terraform plan                                                 │
-  │    -var-file=environments/dev.tfvars                            │
-  │    -var="app_image={ecr_image}:{tag}"                           │
-  │    -out=tfplan                                                  │
-  │                                                                 │
-  │  Plan artifact uploaded (retention: 5 days)                     │
-  └─────────────────────────────────────────────────────────────────┘
-
-
-TRIGGER: Tag v* (e.g. v1.0.0, v1.2.3)
-───────────────────────────────────────
-
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  All previous jobs...                                           │
-  └─────────────────────────────────┬───────────────────────────────┘
-                                    │
-                                    ▼
-  ┌─────────────────────────────────────────────────────────────────┐
-  │              Deploy Production                                  │
-  │  ─────────────────────────────────────────────────────────────  │
-  │                                                                 │
-  │  ⚠ REQUIRES MANUAL APPROVAL                                     │
-  │    GitHub Environment: production                               │
-  │    Configured reviewers must approve before job runs            │
-  │                                                                 │
-  │  Steps:                                                         │
-  │  1. terraform init                                              │
-  │  2. terraform apply                                             │
-  │       -var-file=environments/prod.tfvars                        │
-  │       -var="app_image={ecr_image}:{tag}"                        │
-  │       -auto-approve                                             │
-  │  3. aws ecs wait services-stable                                │
-  │       --cluster emp-prod-cluster                                │
-  │       --services emp-prod-service                               │
-  │  4. Smoke test:                                                 │
-  │       curl -f https://{alb_dns}/actuator/health                │
-  │       → {"status":"UP"} ✓                                      │
-  └─────────────────────────────────────────────────────────────────┘
+    Push --> B
+    Push --> B2
+    Push --> B3
+    B --> TF_V
+    B --> DB
+    B2 --> COV
+    COV --> DP
+    DP --> TF_P
+    B3 --> DP2
+    DP2 --> APP
+    APP --> TF_A
+    TF_A --> HC
 ```
 
-## Job Summary
+## Build Matrix — Multi-Module Maven
 
-| Job | Trigger | Duration | AWS Creds |
-|---|---|---|---|
-| Build & Test | All | ~2 min | ✗ Not needed |
-| Terraform Validate | All | ~13s | ✗ Not needed |
-| Docker Build & Push | `main`, `v*` | ~3 min | ✓ Required |
-| Terraform Plan | `main` | ~1 min | ✓ Required |
-| Deploy Production | `v*` tags | ~5 min | ✓ Required + Manual Approval |
+```yaml
+# Each service built independently for parallel execution
+strategy:
+  matrix:
+    service: [event-service, reservation-service, order-service, consumer-service]
 
-## Branch Strategy
+steps:
+  - name: Build shared modules first
+    run: ./mvnw install -pl shared/domain,shared/infrastructure -DskipTests
 
-```
-main ←─── develop ←─── feature/TICK-XXX-description
-  │                         │
-  │    (PR required)         │ (PR required)
-  │                         │
-  └──── release tag v*       └── individual feature work
-         triggers deploy
+  - name: Test ${{ matrix.service }}
+    run: ./mvnw test -pl services/${{ matrix.service }}
+
+  - name: JaCoCo coverage check
+    run: ./mvnw verify -pl services/${{ matrix.service }} -DskipTests=false
 ```
 
-## Secrets Required
+## Docker Strategy — 4 Independent Images
 
 ```
-GitHub → Settings → Secrets and variables → Actions:
+ECR Repository per service:
+  {account}.dkr.ecr.us-east-1.amazonaws.com/emp-event-service:{tag}
+  {account}.dkr.ecr.us-east-1.amazonaws.com/emp-reservation-service:{tag}
+  {account}.dkr.ecr.us-east-1.amazonaws.com/emp-order-service:{tag}
+  {account}.dkr.ecr.us-east-1.amazonaws.com/emp-consumer-service:{tag}
 
-AWS_ACCESS_KEY_ID       IAM user with ECR push + ECS deploy permissions
-AWS_SECRET_ACCESS_KEY   Corresponding secret key
+Tag strategy:
+  PR merge → :latest
+  Release tag v1.2.3 → :1.2.3 + :stable
 ```
+
+## Terraform State
+
+```
+Remote backend: S3 bucket (nequi-emp-terraform-state)
+State locking:  DynamoDB table (emp-tf-lock)
+Workspaces:     staging / production
+```
+
+## Secrets Management
+
+```
+GitHub Secrets:
+  AWS_ACCESS_KEY_ID      → for CI/CD ECR push + Terraform
+  AWS_SECRET_ACCESS_KEY  → (only in CI/CD, not in app)
+  ECR_REGISTRY           → account ID
+
+Application (ECS):
+  No static credentials — uses ECS Task IAM Role
+  DefaultCredentialsProvider reads role from IMDS automatically
+```
+
+## Gates — Build Fails If
+
+- Any unit test fails
+- JaCoCo line coverage < 90% on any service module
+- JaCoCo branch coverage < 85% on any service module
+- Docker build fails
+- Terraform validate fails
+- `terraform plan` shows destroy of production resources (manual review)

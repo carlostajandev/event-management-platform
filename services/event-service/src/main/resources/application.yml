@@ -1,0 +1,117 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Event Service — application configuration
+# Java 25 / Spring Boot 4 / WebFlux / DynamoDB / Resilience4j
+# ══════════════════════════════════════════════════════════════════════════════
+
+spring:
+  application:
+    name: event-service
+
+  profiles:
+    active: local
+
+  # Java 25 Virtual Threads — offloads blocking I/O from Netty event-loop threads.
+  # DynamoDB SDK uses async HTTP (Netty), so this is a belt-and-suspenders safety
+  # net for any sync code that might slip through during development.
+  threads:
+    virtual:
+      enabled: true
+
+  # Disable Spring Cloud AWS auto-configuration in this service
+  # (SQS is only consumed by consumer-service)
+  autoconfigure:
+    exclude:
+      - io.awspring.cloud.autoconfigure.sqs.SqsAutoConfiguration
+
+# ── Server ────────────────────────────────────────────────────────────────────
+server:
+  port: 8081
+
+# ── AWS / DynamoDB ────────────────────────────────────────────────────────────
+aws:
+  region: us-east-1
+  dynamodb:
+    endpoint: http://localhost:4566
+    table:
+      events: emp-events
+
+# ── Actuator / Observability ──────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+
+# ── Resilience4j ──────────────────────────────────────────────────────────────
+resilience4j:
+  circuitbreaker:
+    instances:
+      dynamodb:
+        # Open circuit when 50% of calls fail in the last 10 requests
+        failure-rate-threshold: 50
+        # Stay open for 30 seconds before trying half-open probe
+        wait-duration-in-open-state: 30s
+        # Sliding window (count-based) over last 10 calls
+        sliding-window-size: 10
+        sliding-window-type: COUNT_BASED
+        # Allow 3 calls in HALF_OPEN to probe recovery
+        permitted-number-of-calls-in-half-open-state: 3
+        # Expose circuit state via Actuator metrics
+        register-health-indicator: true
+
+  retry:
+    instances:
+      dynamodb:
+        # Retry up to 3 times on DynamoDB transient failures
+        max-attempts: 3
+        # Initial backoff 100ms, doubles each attempt (100ms → 200ms → 400ms)
+        wait-duration: 100ms
+        exponential-backoff-multiplier: 2
+        # Only retry on non-business exceptions
+        retry-exceptions:
+          - software.amazon.awssdk.core.exception.SdkClientException
+          - software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputExceededException
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.nequi: DEBUG
+    io.github.resilience4j: INFO
+    software.amazon.awssdk: WARN
+
+---
+# ══════════════════════════════════════════════════════════════════════════════
+# Production / Staging profile — no LocalStack endpoint, IAM role credentials
+# ══════════════════════════════════════════════════════════════════════════════
+spring:
+  config:
+    activate:
+      on-profile: prod, staging
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 8080
+
+aws:
+  dynamodb:
+    # Empty string — SDK uses DefaultCredentialsProvider (ECS Task IAM role)
+    endpoint: ""
+    table:
+      events: emp-events
+
+logging:
+  level:
+    com.nequi: INFO
+    io.github.resilience4j: WARN
+    software.amazon.awssdk: WARN

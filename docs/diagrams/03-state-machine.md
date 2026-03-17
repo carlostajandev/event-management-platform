@@ -1,105 +1,81 @@
-# Ticket State Machine
+# State Machines — Microservices v2
 
-## States and Transitions
+## Reservation State Machine
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        STATE: AVAILABLE                              │
-│                     (initial state on creation)                      │
-└──────────┬──────────────────────────────────────────────────────────┘
-           │
-           ├──► reserve(userId, orderId, expiresAt)
-           │         Guard: ticket is AVAILABLE
-           │         Action: set status=RESERVED, version+1
-           │         ConditionExpression enforces atomicity
-           │
-           ├──► complimentary()
-           │         Guard: ticket is AVAILABLE
-           │         Action: set status=COMPLIMENTARY (FINAL)
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        STATE: RESERVED                               │
-│                  expiresAt: now + TTL (default 10 min)               │
-└──────────┬────────────────────────────────────────────────────────-─┘
-           │
-           ├──► expiresAt < now (detected by scheduler every 60s)
-           │         Action: release() → AVAILABLE
-           │         Note: uses ShedLock — only ONE instance per cycle
-           │
-           ├──► confirmPending()
-           │         Guard: ticket is RESERVED
-           │         Action: set status=PENDING_CONFIRMATION, version+1
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   STATE: PENDING_CONFIRMATION                         │
-│                   (payment processing in progress)                    │
-└──────────┬────────────────────────────────────────────────────────-─┘
-           │
-           ├──► sell()
-           │         Guard: ticket is PENDING_CONFIRMATION
-           │         Action: set status=SOLD, version+1 (FINAL)
-           │
-           └──► release() [payment failed]
-                     Guard: ticket is PENDING_CONFIRMATION
-                     Action: set status=AVAILABLE, version+1
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE : POST /reservations\nconditional write\navailableCount -= n\nversion check\nAudit: NONE → ACTIVE
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                        STATE: SOLD (FINAL)                           │
-│                     No transitions allowed from SOLD                  │
-└─────────────────────────────────────────────────────────────────────┘
+    ACTIVE --> EXPIRED : DynamoDB TTL\nauto-delete (10 min)\ncompensation: availableCount += n\nAudit: ACTIVE → EXPIRED
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                    STATE: COMPLIMENTARY (FINAL)                      │
-│                     No transitions allowed from COMPLIMENTARY         │
-└─────────────────────────────────────────────────────────────────────┘
+    ACTIVE --> CONFIRMED : consumer-service\nprocessOrder() success\nAudit: ACTIVE → CONFIRMED
+
+    ACTIVE --> CANCELLED : DELETE /reservations/{id}\nuser explicit cancel\ncompensation: availableCount += n\nAudit: ACTIVE → CANCELLED
+
+    CONFIRMED --> [*] : terminal state
+    EXPIRED --> [*] : terminal state
+    CANCELLED --> [*] : terminal state
 ```
 
-## Invalid Transitions → 409 Conflict
+**Key rule:** Every transition is atomic (TransactWriteItems or UpdateItem + conditional write) and recorded in emp-audit with 90-day TTL.
 
+## Order State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING_CONFIRMATION : POST /orders\nTransactWriteItems atomic:\n  order + outbox message\nidempotency key cached 24h\nAudit: NONE → PENDING_CONFIRMATION
+
+    PENDING_CONFIRMATION --> CONFIRMED : consumer-service\n@SqsListener ON_SUCCESS\nAudit: PENDING → CONFIRMED
+
+    PENDING_CONFIRMATION --> FAILED : SQS consumer fails\n3 retries → DLQ\nmanual intervention needed\nAudit: PENDING → FAILED
+
+    CONFIRMED --> COMPLETED : payment captured\ntickets issued
+    CONFIRMED --> [*] : terminal
+
+    FAILED --> [*] : terminal
+    COMPLETED --> [*] : terminal
 ```
-Any transition not listed above throws InvalidTicketStateException
-which is mapped by GlobalErrorHandler to HTTP 409 Conflict.
 
-Examples of INVALID transitions:
-  SOLD        → RESERVED         (cannot un-sell a ticket)
-  SOLD        → AVAILABLE        (cannot release a sold ticket)
-  AVAILABLE   → PENDING_CONFIRM  (must go through RESERVED first)
-  COMPLIMENT. → any state        (FINAL state, immutable)
+## Outbox Message State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> UNPUBLISHED : TransactWriteItems\nwith order creation\npublished=false\nGSI1PK=PUBLISHED#false
+
+    UNPUBLISHED --> PUBLISHED : OutboxPoller\nevery 5s reads GSI1\npublishes to SQS\nmarks published=true
+
+    PUBLISHED --> [*] : TTL 24h\nDynamoDB auto-deletes
+    UNPUBLISHED --> [*] : TTL 24h (safety net)
 ```
 
-## Implementation
+## Java 25 Pattern Matching — Exception → HTTP Status
 
 ```java
-// TicketStateMachine.java
-public Ticket reserve(Ticket ticket, String userId, String orderId, Instant expiresAt) {
-    if (ticket.status() != TicketStatus.AVAILABLE) {
-        throw new InvalidTicketStateException(
-            ticket.ticketId(), ticket.status(), TicketStatus.RESERVED);
+// GlobalErrorHandler.java — sealed switch, no default needed for known types
+HttpStatus status = switch (ex) {
+    case EventNotFoundException ignored          -> HttpStatus.NOT_FOUND;           // 404
+    case ReservationNotFoundException ignored    -> HttpStatus.NOT_FOUND;           // 404
+    case OrderNotFoundException ignored          -> HttpStatus.NOT_FOUND;           // 404
+    case TicketNotAvailableException ignored     -> HttpStatus.CONFLICT;            // 409
+    case ConcurrentModificationException ignored -> HttpStatus.CONFLICT;            // 409
+    case IdempotencyConflictException ignored    -> HttpStatus.UNPROCESSABLE_ENTITY;// 422
+    case IllegalArgumentException ignored        -> HttpStatus.BAD_REQUEST;         // 400
+    default -> {
+        log.error("Unhandled exception", ex);
+        yield HttpStatus.INTERNAL_SERVER_ERROR;                                     // 500
     }
-    return ticket.toBuilder()
-        .status(TicketStatus.RESERVED)
-        .userId(userId)
-        .orderId(orderId)
-        .expiresAt(expiresAt)
-        .reservedAt(Instant.now())
-        .version(ticket.version() + 1)
-        .build();
-}
+};
 ```
 
-## Test Coverage — 17 Tests (TicketStateMachineTest)
+## AuditService Integration (v2 Fix)
 
-```
-✓ AVAILABLE → RESERVED        (valid)
-✓ AVAILABLE → COMPLIMENTARY   (valid)
-✓ RESERVED  → AVAILABLE       (expiry/release)
-✓ RESERVED  → PENDING_CONF    (confirm pending)
-✓ PENDING   → SOLD            (successful payment)
-✓ PENDING   → AVAILABLE       (failed payment)
-✓ SOLD      → RESERVED        (invalid → 409)
-✓ SOLD      → AVAILABLE       (invalid → 409)
-✓ COMPLT.   → RESERVED        (invalid → 409)
-... and 8 more edge cases
-```
+In v1 the `AuditService` was implemented but **never called**. In v2 every state transition calls `auditRepository.save()`:
+
+| Service | Transition | Trigger |
+|---|---|---|
+| reservation-service | NONE → ACTIVE | `ReserveTicketsService.execute()` |
+| reservation-service | ACTIVE → CANCELLED | `CancelReservationService.execute()` |
+| reservation-service | ACTIVE → EXPIRED | `ReleaseExpiredReservationsService.execute()` |
+| consumer-service | NONE → PENDING_CONFIRMATION | order-service via `CreateOrderService` |
+| consumer-service | PENDING → CONFIRMED | `ProcessOrderService.process()` |
+| consumer-service | ACTIVE → CONFIRMED | `ProcessOrderService.process()` (reservation) |

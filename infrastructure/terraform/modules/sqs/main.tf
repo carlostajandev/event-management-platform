@@ -5,11 +5,7 @@ locals {
 # ── Dead Letter Queue — receives messages after 3 failed delivery attempts ──
 resource "aws_sqs_queue" "purchase_orders_dlq" {
   name                       = "${local.prefix}-purchase-orders-dlq"
-<<<<<<< Updated upstream
   message_retention_seconds  = 1_209_600  # 14 days
-=======
-  message_retention_seconds  = 1209600  # 14 days
->>>>>>> Stashed changes
   kms_master_key_id          = "alias/aws/sqs"
 
   tags = { Name = "${local.prefix}-purchase-orders-dlq" }
@@ -23,11 +19,7 @@ resource "aws_sqs_queue" "purchase_orders" {
   name                       = "${local.prefix}-purchase-orders"
   visibility_timeout_seconds = 30
   receive_wait_time_seconds  = 20   # long polling
-<<<<<<< Updated upstream
   message_retention_seconds  = 86_400  # 24 hours
-=======
-  message_retention_seconds  = 86400  # 24 hours
->>>>>>> Stashed changes
   kms_master_key_id          = "alias/aws/sqs"
 
   redrive_policy = jsonencode({

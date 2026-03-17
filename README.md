@@ -178,22 +178,4 @@ terraform apply -var-file=environments/dev.tfvars
 # - ECS Fargate cluster + ALB (4 services, rolling deploy)
 ```
 
-## Answers to Evaluator Questions
 
-**Q: How do you guarantee no overselling under 10,000 concurrent requests?**
-Conditional write with version counter on the event item. `availableCount >= n AND version = expected`. If the condition fails (concurrent write won), retry with exponential backoff (100ms, 200ms, 400ms, max 3 retries), then 409 Conflict. Proven in `TicketReservationConcurrencyTest`.
-
-**Q: What happens if DynamoDB accepts the order but SQS is down?**
-Transactional outbox: `TransactWriteItems([order, outboxMessage])`. Both written atomically or neither. `OutboxPoller` runs every 5s — retries SQS publish until it succeeds. Zero zombie orders.
-
-**Q: How do your microservices scale horizontally?**
-All services are stateless. State lives in DynamoDB and SQS. `consumer-service` scales with SQS queue depth. SQS distributes messages across instances automatically. ECS auto-scaling configured in Terraform.
-
-**Q: Why TTL instead of scheduler for expiry?**
-O(1) vs O(table). DynamoDB TTL is a background process — zero compute, zero cost, scales to millions of reservations. A scheduler scanning the full table would be O(table) = unusable at scale (the previous code had this bug).
-
-**Q: Known limitations?**
-- DynamoDB Streams limited in LocalStack → reconciliation scheduler as fallback
-- No virtual waiting room for sold-out events under bursty load (future improvement)
-- Write sharding for popular events is documented but not fully wired in default path
-- Terraform uses simple ECS rolling deploy, not blue-green (documented trade-off)

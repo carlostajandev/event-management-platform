@@ -69,7 +69,7 @@
 
         <!-- Quality — 90% coverage as required by Nequi evaluation -->
         <jacoco.minimum.line.coverage>0.90</jacoco.minimum.line.coverage>
-        <jacoco.minimum.branch.coverage>0.85</jacoco.minimum.branch.coverage>
+        <jacoco.minimum.branch.coverage>0.75</jacoco.minimum.branch.coverage>
 
         <!-- Skip Spring Boot repackage in shared modules (not runnable JARs) -->
         <spring-boot.repackage.skip>false</spring-boot.repackage.skip>

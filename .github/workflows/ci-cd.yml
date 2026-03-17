@@ -52,6 +52,8 @@ jobs:
 
       - name: Install shared/domain and shared/infrastructure
         run: ./mvnw install -pl shared/domain,shared/infrastructure -DskipTests --no-transfer-progress
+
+
       - name: Cache shared modules for downstream jobs
         uses: actions/cache@v4
         with:

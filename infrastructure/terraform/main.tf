@@ -50,23 +50,23 @@ module "sqs" {
 }
 
 module "iam" {
-  source                = "./modules/iam"
-  project_name          = var.project_name
-  environment           = var.environment
-  dynamodb_table_arns   = module.dynamodb.table_arns
-  sqs_queue_arns        = module.sqs.queue_arns
+  source              = "./modules/iam"
+  project_name        = var.project_name
+  environment         = var.environment
+  dynamodb_table_arns = module.dynamodb.table_arns
+  sqs_queue_arns      = module.sqs.queue_arns
 }
 
 module "ecs" {
-  source              = "./modules/ecs"
-  project_name        = var.project_name
-  environment         = var.environment
-  vpc_id              = module.networking.vpc_id
-  private_subnet_ids  = module.networking.private_subnet_ids
-  public_subnet_ids   = module.networking.public_subnet_ids
-  task_role_arn       = module.iam.ecs_task_role_arn
-  execution_role_arn  = module.iam.ecs_execution_role_arn
-  aws_region          = var.aws_region
-  service_image_tags  = var.service_image_tags
-  ecr_registry        = var.ecr_registry
+  source             = "./modules/ecs"
+  project_name       = var.project_name
+  environment        = var.environment
+  vpc_id             = module.networking.vpc_id
+  private_subnet_ids = module.networking.private_subnet_ids
+  public_subnet_ids  = module.networking.public_subnet_ids
+  task_role_arn      = module.iam.ecs_task_role_arn
+  execution_role_arn = module.iam.ecs_execution_role_arn
+  aws_region         = var.aws_region
+  service_image_tags = var.service_image_tags
+  ecr_registry       = var.ecr_registry
 }

@@ -249,4 +249,41 @@ class CreateOrderServiceTest {
 
         verify(orderRepository, never()).saveWithOutbox(any(), any());
     }
+
+    // ── Idempotency cache deserialization failure — falls through to new order ─
+
+    @Test
+    @DisplayName("should fall through to new order when cached idempotency response fails to deserialize")
+    void shouldFallThroughToNewOrderWhenCacheDeserializationFails() throws JsonProcessingException {
+        // Given — cache hit but JSON is corrupt, falls through to processNewOrder
+        CreateOrderCommand request = new CreateOrderCommand(RESERVATION_ID, USER_ID, IDEMPOTENCY_KEY);
+        IdempotencyRecord corruptRecord = IdempotencyRecord.create(IDEMPOTENCY_KEY, ORDER_ID, "{corrupt}");
+
+        when(idempotencyRepository.findByKey(IDEMPOTENCY_KEY))
+                .thenReturn(Mono.just(corruptRecord));
+        when(objectMapper.readValue(anyString(), any(Class.class)))
+                .thenThrow(new com.fasterxml.jackson.core.JsonParseException(null, "corrupt json"));
+
+        when(reservationRepository.findById(RESERVATION_ID))
+                .thenReturn(Mono.just(activeReservation));
+        when(objectMapper.writeValueAsString(any()))
+                .thenReturn("{\"id\":\"order-001\"}");
+        when(orderRepository.saveWithOutbox(any(Order.class), anyString()))
+                .thenReturn(Mono.just(pendingOrder));
+        when(idempotencyRepository.save(any(IdempotencyRecord.class)))
+                .thenReturn(Mono.just(IdempotencyRecord.create(IDEMPOTENCY_KEY, ORDER_ID, "{}")));
+        when(auditRepository.save(any(AuditEntry.class)))
+                .thenReturn(Mono.just(AuditEntry.create(ORDER_ID, "ORDER", "NONE",
+                        "PENDING_CONFIRMATION", USER_ID, IDEMPOTENCY_KEY, Instant.now())));
+
+        // When & Then — order created after cache miss
+        StepVerifier.create(createOrderService.execute(request))
+                .assertNext(response -> {
+                    assertThat(response.status()).isEqualTo(OrderStatus.PENDING_CONFIRMATION);
+                    assertThat(response.reservationId()).isEqualTo(RESERVATION_ID);
+                })
+                .verifyComplete();
+
+        verify(orderRepository).saveWithOutbox(any(Order.class), anyString());
+    }
 }

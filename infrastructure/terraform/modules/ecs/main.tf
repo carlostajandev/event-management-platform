@@ -87,7 +87,7 @@ resource "aws_ecs_task_definition" "service" {
     }]
     environment = [
       { name = "SPRING_PROFILES_ACTIVE", value = var.environment },
-      { name = "AWS_REGION",             value = var.aws_region },
+      { name = "AWS_REGION", value = var.aws_region },
     ]
     logConfiguration = {
       logDriver = "awslogs"

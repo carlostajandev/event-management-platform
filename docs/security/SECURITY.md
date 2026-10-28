@@ -1,8 +1,8 @@
 # Security
 
 How the system handles the risks the spec names: secrets and credentials, malicious retries, idempotency and
-resource abuse. Each control points to the code or test that implements it. Controls marked **(Phase 7)** belong
-to the AWS deployment and are described in the Terraform code.
+resource abuse. Each control points to the code or test that implements it. Controls marked **(AWS)** belong to
+the deployment in `infrastructure/terraform` (decisions in its README).
 
 ## Secrets and credentials
 
@@ -12,8 +12,10 @@ to the AWS deployment and are described in the Terraform code.
 | The application never reads access keys. The AWS SDK uses the default credentials chain: locally the dummy env vars, on AWS the ECS task role. | `AwsClientsConfig` |
 | Secret scanning of the full Git history on every push (gitleaks). | `.github/workflows/ci-cd.yml`, job `secrets` |
 | Weekly dependency, base image and CI action updates. | `.github/dependabot.yml` |
-| **(Phase 7)** One IAM role per role (`api`, `worker`), least privilege: the api cannot read the queue and the worker cannot create events. No long-lived keys anywhere; CI deploys through GitHub OIDC. | `infrastructure/terraform` |
-| **(Phase 7)** DynamoDB and SQS encrypted at rest with KMS; traffic to them stays inside the VPC through VPC endpoints. | `infrastructure/terraform` |
+| **(AWS)** One IAM role per role, built from the calls the code makes: the api has no SQS permission; the worker can only put audit items, so it cannot create events or orders. No action wildcards. Guarded by `terraform test`. | `modules/compute/iam.tf`, `modules/compute/tests` |
+| **(AWS)** No long-lived keys: tasks use their task role, CI uses GitHub OIDC. The deploy role trusts only this repository's jobs in the matching GitHub environment (prod requires reviewers), and can only push one image repository and roll two services. | `modules/ci` |
+| **(AWS)** Data encrypted at rest with AWS owned/managed keys (DynamoDB, SQS, ECR, logs); SQS denies non-TLS access. Tasks have no route to the internet: AWS services are reached through VPC endpoints. | `modules/data`, `modules/network` |
+| **(AWS)** Checkov scans the Terraform in CI; accepted findings are justified next to the resource. | `.github/workflows/ci-cd.yml` |
 
 ## Idempotency and malicious retries
 
@@ -34,7 +36,7 @@ Idempotency records expire with DynamoDB TTL after 24 hours, so the table does n
 | Abuse | Control | Where |
 |---|---|---|
 | Flooding the API from one user | Token bucket per `X-User-Id`: 5 requests/s, burst 10 → `429 RATE_LIMITED` with `Retry-After`. | `RequestProtectionFilter`, `RequestProtectionFilterTest` |
-| Flooding from one address with many user ids | Token bucket per client address: 100 requests/s, burst 200. **(Phase 7)** Behind the load balancer the peer address is the balancer, so this job moves to AWS WAF rate-based rules. | `RequestProtectionFilter` |
+| Flooding from one address with many user ids | Token bucket per client address: 100 requests/s, burst 200. **(AWS)** Behind the load balancer the peer address is the balancer, so this job moves to a WAF rate-based rule, next to the AWS known-bad-inputs rule group. | `RequestProtectionFilter` |
 | Exhausting memory with new keys | Rate-limit buckets live in a bounded cache (100,000 keys, idle keys forgotten after a minute). | `RateLimiter` |
 | Overload that makes DynamoDB slow for everyone | Cap on requests in flight per instance → `503 OVERLOADED` before any write, so the outcome is certain and retrying is safe. | `RequestProtectionFilter`, `load-test/RESULTS.md` |
 | Hoarding tickets | Max 6 tickets per order; holds expire after 10 minutes and the tickets return to the pool. | `Order`, `ReleaseExpiredHoldsUseCase` |

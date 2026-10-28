@@ -12,8 +12,10 @@ The API, the worker, DynamoDB Local and ElasticMQ share the machine.
 
 ## How to run
 
+k6 sends every request from one address, so start the stack with the per-address limit off:
+
 ```bash
-docker compose up -d --build --wait
+RATE_LIMIT_IP_RPS=0 docker compose up -d --build --wait
 docker run --rm --network host -v "$PWD/load-test:/scripts" grafana/k6:2.3.0 run /scripts/flash-sale.js
 docker run --rm --network host -e PROFILE=steady -v "$PWD/load-test:/scripts" grafana/k6:2.3.0 run /scripts/flash-sale.js
 ```
@@ -24,8 +26,8 @@ docker run --rm --network host -e PROFILE=steady -v "$PWD/load-test:/scripts" gr
 
 | Metric | Value |
 |---|---|
-| Orders accepted | 2,401 (3,601 tickets) |
-| `POST /orders` latency | p50 16 ms · p90 47 ms · p95 63 ms · max 382 ms |
+| Orders accepted | 2,400 (3,600 tickets) |
+| `POST /orders` latency | p50 21 ms · p90 48 ms · p95 59 ms · max 219 ms |
 | HTTP failures (5xx) | 0 |
 | Clients that gave up | 0 |
 | Retried requests answered with a different order | 0 |
@@ -35,30 +37,37 @@ All thresholds pass (p95 < 200 ms, p99 < 500 ms).
 
 ### `sellout`: 300 orders/s for 60 s, 1,000 tickets
 
-| Metric | Value |
-|---|---|
-| Requests | 15,027 · 0 HTTP 5xx |
-| Orders accepted | 652 (977 tickets reported to buyers) |
-| Answered `409 SOLD_OUT` | 6,111 |
-| Client retries after `503` | 8,181 |
-| Buyers that gave up after 6 attempts | 201 |
-| Retried requests answered with a different order | 0 |
-| Final inventory | `available 0 · pendingConfirmation 1000 · reserved 0` |
+The same run before and after the edge protection (rate limits and the in-flight cap,
+`MAX_IN_FLIGHT_REQUESTS=16` locally):
 
-- **No overselling:** the counters add up to the capacity and exactly 1,000 tickets are held.
-- **Every ticket was taken:** `available` reaches 0.
-- **Gap:** 23 of the 1,000 held tickets belong to orders whose buyer gave up before seeing the `202`. Those
-  orders were committed while the client was being told `503 TIMEOUT`. Nothing is lost: the hold expires after
-  10 minutes and the tickets go back to the pool (RF2). The `tickets_held == capacity` threshold is kept strict
-  so this gap stays visible.
+| Metric | Before | After |
+|---|---|---|
+| HTTP 5xx | 0 | 0 |
+| DynamoDB calls that timed out | thousands | **0** |
+| Tickets held / reported to their buyer | 1,000 / 977 | 1,000 / **1,000** |
+| Orders accepted | 652 | 662 |
+| Answered `409 SOLD_OUT` | 6,111 | 13,712 |
+| Requests turned away at the edge (`503 OVERLOADED`, nothing written) | — | 15,453 |
+| Buyers that gave up after 6 attempts | 201 (outcome unknown) | 910 (certainly not written) |
+| Retried requests answered with a different order | 0 | 0 |
+| Latency of all requests | p95 ≈ 1.5 s | p95 96 ms |
+| Final inventory | `available 0 · pendingConfirmation 1000` | `available 0 · pendingConfirmation 1000` |
+
+- **No overselling** in either run: the counters add up to the capacity and exactly 1,000 tickets are held.
+- **Before**, overload reached DynamoDB: calls timed out and 23 tickets went to orders whose buyer had been
+  told `503 TIMEOUT` and gave up. The tickets were safe (the hold expires after 10 minutes, RF2), but those
+  buyers never learned they had them.
+- **After**, overload is refused before DynamoDB. A buyer who gives up was never written, so every held
+  ticket belongs to a buyer who received `202`. All thresholds pass.
 
 ## Findings and changes made
 
-The first run at 300 orders/s returned **7,561 `500` errors** while DynamoDB had committed **665 orders for
+The first run at 300 orders/s, before any of these changes, returned **7,561 `500` errors** while DynamoDB had committed **665 orders for
 exactly 1,000 tickets**. Only 20 buyers were told they had tickets.
 
 | Finding | Change |
 |---|---|
+| Overload reached DynamoDB and turned into timeouts whose outcome the client could not know. | Edge protection (ADR 0004): `429 RATE_LIMITED` per user and per address, and `503 OVERLOADED` above a cap on requests in flight. Both are answered before any write. |
 | A DynamoDB call that exceeds the SDK timeouts may still commit. Answering `500` hid the order from its buyer. | SDK client errors (`SdkClientException`: timeouts, aborted connections) map to `503 TIMEOUT` with `Retry-After`, telling the client to retry with the same `Idempotency-Key`. The retry returns the stored order instead of writing again. |
 | The readiness probe called `DescribeTable` on every table. Under load it failed, which in AWS would take every task out of the load balancer at the same time. | Readiness is shallow (`readinessState` only). DynamoDB status stays in `/actuator/health` for monitoring. |
 | A failed `DescribeTable` cancelled the other four and their errors were dropped (`onErrorDropped`). | The health check delays errors until every call completes. |
@@ -84,8 +93,9 @@ so one event tops out at roughly **500 orders/s** before throttling. That is wel
 per event, not per system. If one event needs more, the inventory item can be split into shards (ADR 0001).
 This estimate gets measured once the Terraform stack exists.
 
-## Next
+## Sizing the in-flight cap
 
-Phase 6 adds backpressure at the edge (ADR 0004): rate limiting and a cap on in-flight writes, so overload is
-answered with a fast `429`/`503` before reaching DynamoDB instead of a timeout whose outcome is unknown. This
-test is re-run after that change; the target is no buyer giving up in `sellout`.
+The cap follows Little's law: requests in flight = throughput x latency. DynamoDB Local sustains about 40
+transactions/s, and queueing must stay below the 500 ms attempt timeout, so 16 in flight is the local value
+(`docker-compose.yml`). On DynamoDB, at about 30 ms per transaction, the default of 64 per instance allows
+about 2,000 requests/s per instance; the per-event ceiling above is reached first.

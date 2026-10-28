@@ -6,7 +6,8 @@
 //                     ticket was reported to its buyer, and a retried request returns the same order.
 //   steady            a rate the local emulator can absorb, with more tickets than buyers. Measures latency.
 //
-// Run (API on localhost:8080):
+// Run (API on localhost:8080). k6 sends everything from one address, so start the stack with the per-address
+// limit off: RATE_LIMIT_IP_RPS=0 docker compose up -d --wait
 //   docker run --rm --network host -v "$PWD/load-test:/scripts" grafana/k6:2.3.0 run /scripts/flash-sale.js
 //   docker run --rm --network host -e PROFILE=steady -v "$PWD/load-test:/scripts" grafana/k6:2.3.0 run /scripts/flash-sale.js
 import http from 'k6/http';
@@ -31,10 +32,13 @@ const ticketsHeld = new Counter('tickets_held');
 const soldOut = new Counter('orders_sold_out');
 const gaveUp = new Counter('orders_gave_up');
 const clientRetries = new Counter('client_retries');
+const shed = new Counter('requests_shed');
 const replayMismatch = new Counter('idempotent_replay_mismatch');
 
-// 409 SOLD_OUT and 503 (CONTENTION, TIMEOUT) are expected answers in a flash sale, not failures.
-http.setResponseCallback(http.expectedStatuses(200, 201, 202, 409, 503));
+// 409 SOLD_OUT, 429 RATE_LIMITED and 503 (OVERLOADED, CONTENTION, TIMEOUT) are expected answers in a flash
+// sale, not failures.
+http.setResponseCallback(http.expectedStatuses(200, 201, 202, 409, 429, 503));
+const RETRYABLE = [429, 503];
 
 const thresholds = {
     'http_req_failed': ['rate<0.01'],
@@ -66,15 +70,19 @@ export const options = {
 
 const json = { 'Content-Type': 'application/json' };
 
-// A well-behaved client: on 503 it waits Retry-After and sends the same request with the same key.
+// A well-behaved client: on 429/503 it waits Retry-After and sends the same request with the same key.
 function placeOrder(body, params) {
     let res;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         res = http.post(`${BASE_URL}/orders`, body, params);
-        if (res.status !== 503) {
+        if (!RETRYABLE.includes(res.status)) {
             return res;
         }
         clientRetries.add(1);
+        // Rejected at the edge: certainly not written, unlike a TIMEOUT.
+        if (res.status === 429 || (res.status === 503 && res.json('code') === 'OVERLOADED')) {
+            shed.add(1);
+        }
         sleep(Number(res.headers['Retry-After'] || 1));
     }
     return res;
@@ -103,7 +111,7 @@ export default function (data) {
     const body = JSON.stringify({ eventId: data.eventId, quantity });
 
     const res = placeOrder(body, params);
-    check(res, { 'expected status': (r) => [202, 409, 503].includes(r.status) });
+    check(res, { 'expected status': (r) => [202, 409, 429, 503].includes(r.status) });
 
     if (res.status === 202) {
         accepted.add(1);
@@ -111,13 +119,15 @@ export default function (data) {
         // One in ten buyers sends the same request again, as a client would after a lost response.
         if (iteration % 10 === 0) {
             const retry = placeOrder(body, { ...params, tags: { name: 'retry_order' } });
-            if (retry.status !== 202 || retry.json('orderId') !== res.json('orderId')) {
+            // Turned away at the edge is fine (nothing written); any other answer must be the same order.
+            const sameOrder = retry.status === 202 && retry.json('orderId') === res.json('orderId');
+            if (!sameOrder && !RETRYABLE.includes(retry.status)) {
                 replayMismatch.add(1);
             }
         }
     } else if (res.status === 409) {
         soldOut.add(1);
-    } else if (res.status === 503) {
+    } else if (RETRYABLE.includes(res.status)) {
         gaveUp.add(1);
     }
 }

@@ -7,6 +7,7 @@ import com.nequi.ticketing.domain.model.IdempotencyKey;
 import com.nequi.ticketing.domain.model.IdempotencyRecord;
 import com.nequi.ticketing.domain.model.Inventory;
 import com.nequi.ticketing.domain.model.Money;
+import com.nequi.ticketing.support.LocalDynamoDb;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import reactor.test.StepVerifier;

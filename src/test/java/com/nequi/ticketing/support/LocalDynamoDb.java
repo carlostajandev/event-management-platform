@@ -1,4 +1,4 @@
-package com.nequi.ticketing.infrastructure.persistence.dynamodb;
+package com.nequi.ticketing.support;
 
 import com.nequi.ticketing.infrastructure.config.TicketingProperties;
 import org.testcontainers.containers.GenericContainer;
@@ -17,9 +17,9 @@ import java.time.Duration;
  * One DynamoDB Local container per test JVM. Tables are created by the same script docker compose uses,
  * so tests and the local stack share a single schema definition.
  */
-final class LocalDynamoDb {
+public final class LocalDynamoDb {
 
-    static final TicketingProperties PROPERTIES = new TicketingProperties(
+    public static final TicketingProperties PROPERTIES = new TicketingProperties(
             new TicketingProperties.Aws("us-east-1", "", Duration.ofSeconds(5), Duration.ofSeconds(2)),
             new TicketingProperties.Tables("ticketing-events", "ticketing-orders", "ticketing-idempotency",
                     "ticketing-audit", "ticketing-outbox"));
@@ -38,12 +38,18 @@ final class LocalDynamoDb {
     private LocalDynamoDb() {
     }
 
-    static synchronized DynamoDbAsyncClient client() {
-        if (client == null) {
+    public static synchronized String endpoint() {
+        if (!DYNAMODB.isRunning()) {
             DYNAMODB.start();
             createTables();
+        }
+        return "http://%s:%d".formatted(DYNAMODB.getHost(), DYNAMODB.getMappedPort(8000));
+    }
+
+    public static synchronized DynamoDbAsyncClient client() {
+        if (client == null) {
             client = DynamoDbAsyncClient.builder()
-                    .endpointOverride(URI.create("http://%s:%d".formatted(DYNAMODB.getHost(), DYNAMODB.getMappedPort(8000))))
+                    .endpointOverride(URI.create(endpoint()))
                     .region(Region.US_EAST_1)
                     .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("local", "local")))
                     .build();

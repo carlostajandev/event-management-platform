@@ -15,6 +15,7 @@ import com.nequi.ticketing.domain.model.Order;
 import com.nequi.ticketing.domain.model.OrderId;
 import com.nequi.ticketing.domain.model.StateTransition;
 import com.nequi.ticketing.domain.model.UserId;
+import com.nequi.ticketing.support.LocalDynamoDb;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;

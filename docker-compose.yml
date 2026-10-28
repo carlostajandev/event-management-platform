@@ -52,6 +52,7 @@ services:
       <<: *local-aws
       SPRING_PROFILES_ACTIVE: api
       DYNAMODB_ENDPOINT: http://dynamodb:8000
+      SPRING_CLOUD_AWS_SQS_ENDPOINT: http://sqs:9324
     ports:
       - "8080:8080"
 
@@ -61,5 +62,6 @@ services:
       <<: *local-aws
       SPRING_PROFILES_ACTIVE: worker
       DYNAMODB_ENDPOINT: http://dynamodb:8000
+      SPRING_CLOUD_AWS_SQS_ENDPOINT: http://sqs:9324
     ports:
       - "8081:8080"

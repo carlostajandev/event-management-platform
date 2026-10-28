@@ -6,6 +6,16 @@ spring:
     default: api
   main:
     banner-mode: off
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:us-east-1}
+      sqs:
+        listener:
+          max-concurrent-messages: 10
+          max-messages-per-poll: 10
+          # Long polling; also bounds how long shutdown waits for an in-flight poll.
+          poll-timeout: 10s
   codec:
     # Requests are small JSON documents; reject anything larger early (resource abuse).
     max-in-memory-size: 16KB
@@ -22,6 +32,12 @@ ticketing:
     idempotency: ${TABLE_IDEMPOTENCY:ticketing-idempotency}
     audit: ${TABLE_AUDIT:ticketing-audit}
     outbox: ${TABLE_OUTBOX:ticketing-outbox}
+  worker:
+    orders-queue: ${QUEUE_ORDERS:ticketing-orders}
+    outbox-poll-interval: 500ms
+    outbox-batch-size: 25
+    expiry-interval: 5s
+    expiry-batch-size: 200
 
 management:
   endpoints:

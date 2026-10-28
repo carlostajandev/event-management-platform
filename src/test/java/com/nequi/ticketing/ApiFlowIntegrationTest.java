@@ -1,6 +1,6 @@
 package com.nequi.ticketing;
 
-import com.nequi.ticketing.support.LocalDynamoDb;
+import com.nequi.ticketing.support.LocalAws;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,10 +26,8 @@ class ApiFlowIntegrationTest {
     WebTestClient client;
 
     @DynamicPropertySource
-    static void dynamoDb(DynamicPropertyRegistry registry) {
-        System.setProperty("aws.accessKeyId", "local");
-        System.setProperty("aws.secretAccessKey", "local");
-        registry.add("ticketing.aws.dynamodb-endpoint", LocalDynamoDb::endpoint);
+    static void localAws(DynamicPropertyRegistry registry) {
+        LocalAws.register(registry);
     }
 
     @Test

@@ -9,6 +9,8 @@ import com.nequi.ticketing.application.order.ConfirmOrderUseCase;
 import com.nequi.ticketing.application.order.GetOrderUseCase;
 import com.nequi.ticketing.application.order.IssueComplimentaryUseCase;
 import com.nequi.ticketing.application.order.PlaceOrderUseCase;
+import com.nequi.ticketing.application.order.ProcessPlacedOrderUseCase;
+import com.nequi.ticketing.application.order.ReleaseExpiredHoldsUseCase;
 import com.nequi.ticketing.domain.port.EventRepository;
 import com.nequi.ticketing.domain.port.IdempotencyRepository;
 import com.nequi.ticketing.domain.port.OrderRepository;
@@ -68,6 +70,16 @@ class UseCaseConfig {
     @Bean
     GetOrderUseCase getOrderUseCase(OrderRepository orders) {
         return new GetOrderUseCase(orders);
+    }
+
+    @Bean
+    ProcessPlacedOrderUseCase processPlacedOrderUseCase(OrderRepository orders, Clock clock) {
+        return new ProcessPlacedOrderUseCase(orders, clock);
+    }
+
+    @Bean
+    ReleaseExpiredHoldsUseCase releaseExpiredHoldsUseCase(OrderRepository orders, Clock clock) {
+        return new ReleaseExpiredHoldsUseCase(orders, clock);
     }
 
     @Bean

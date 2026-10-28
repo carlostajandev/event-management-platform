@@ -1,43 +1,31 @@
 package com.nequi.ticketing;
 
-import org.junit.jupiter.api.BeforeEach;
+import com.nequi.ticketing.support.LocalAws;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
-import software.amazon.awssdk.services.dynamodb.model.DescribeTableResponse;
-import software.amazon.awssdk.services.dynamodb.model.TableStatus;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
-
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 /**
- * Boots the full context once per role and checks that each one reports its role and becomes ready.
+ * Boots the full context once per role against the local emulators and checks that each one reports its
+ * role and becomes ready.
  */
 class TicketingApplicationTest {
+
+    @DynamicPropertySource
+    static void localAws(DynamicPropertyRegistry registry) {
+        LocalAws.register(registry);
+    }
 
     abstract static class RoleContext {
 
         @Autowired
         WebTestClient webTestClient;
-
-        @MockitoBean
-        DynamoDbAsyncClient dynamoDb;
-
-        @BeforeEach
-        @SuppressWarnings("unchecked")
-        void tablesAreActive() {
-            when(dynamoDb.describeTable(any(Consumer.class))).thenReturn(CompletableFuture.completedFuture(
-                    DescribeTableResponse.builder().table(table -> table.tableStatus(TableStatus.ACTIVE)).build()));
-        }
 
         void assertReadyWithRole(String role) {
             webTestClient.get().uri("/actuator/health/readiness").exchange()
@@ -70,6 +58,11 @@ class TicketingApplicationTest {
         @Test
         void startsAndBecomesReady() {
             assertReadyWithRole("worker");
+        }
+
+        @Test
+        void exposesNoApiEndpoints() {
+            webTestClient.get().uri("/api/v1/events").exchange().expectStatus().isNotFound();
         }
     }
 }

@@ -61,6 +61,9 @@ jobs:
       - name: Start stack and wait for healthy services
         run: docker compose up -d --build --wait --wait-timeout 180
 
+      - name: A second up is idempotent (tables already exist)
+        run: docker compose up -d --wait --wait-timeout 120
+
       - name: Both roles are ready
         run: |
           curl -fsS localhost:8080/actuator/health/readiness

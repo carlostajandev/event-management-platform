@@ -21,9 +21,14 @@ create_table() {
   fi
 }
 
+# Idempotent like create_table: `docker compose up` can run again while DynamoDB Local keeps its tables.
 enable_ttl() {
-  $DDB update-time-to-live --table-name "$1" \
-    --time-to-live-specification Enabled=true,AttributeName=ttl >/dev/null
+  local status
+  status=$($DDB describe-time-to-live --table-name "$1" --query TimeToLiveDescription.TimeToLiveStatus --output text)
+  if [ "$status" != "ENABLED" ]; then
+    $DDB update-time-to-live --table-name "$1" \
+      --time-to-live-specification Enabled=true,AttributeName=ttl >/dev/null
+  fi
 }
 
 # Events: event metadata (SK=METADATA) and its inventory counters (SK=INVENTORY).

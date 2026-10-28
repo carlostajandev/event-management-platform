@@ -19,6 +19,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.reactive.result.method.annotation.ResponseEntityExceptionHandler;
+import software.amazon.awssdk.core.exception.SdkClientException;
 
 /**
  * Maps errors to RFC 9457 problem details. Each problem carries a stable {@code code} clients can branch on.
@@ -64,6 +65,22 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .header(HttpHeaders.RETRY_AFTER, "1")
                 .body(body(HttpStatus.SERVICE_UNAVAILABLE, "CONTENTION", exception.getMessage()));
+    }
+
+    /**
+     * The call to DynamoDB failed on the client side (timeouts, aborted connections) after the SDK retries, so its
+     * outcome is unknown: a write may still have committed. The client is told to retry with the same
+     * Idempotency-Key, which returns the original result instead of writing again. Errors DynamoDB answered with
+     * are not client exceptions and stay 500.
+     */
+    @ExceptionHandler(SdkClientException.class)
+    ResponseEntity<ProblemDetail> timeout(SdkClientException exception) {
+        log.warn("Datastore timeout: {}", exception.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(body(HttpStatus.SERVICE_UNAVAILABLE, "TIMEOUT",
+                        "The request did not complete in time and may have been applied; "
+                                + "retry with the same Idempotency-Key to get its result"));
     }
 
     private static ResponseEntity<ProblemDetail> problem(HttpStatus status, String code, String detail) {

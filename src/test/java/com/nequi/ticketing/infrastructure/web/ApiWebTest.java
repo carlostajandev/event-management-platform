@@ -42,6 +42,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import software.amazon.awssdk.core.exception.ApiCallTimeoutException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -172,6 +173,16 @@ class ApiWebTest {
                 .expectStatus().isEqualTo(503)
                 .expectHeader().valueEquals("Retry-After", "1")
                 .expectBody().jsonPath("$.code").isEqualTo("CONTENTION");
+    }
+
+    @Test
+    void datastoreTimeoutAsksTheClientToRetryWithTheSameKey() {
+        when(placeOrder.execute(any())).thenReturn(Mono.error(ApiCallTimeoutException.create(2000)));
+
+        postOrder("user-1", "key-1", Map.of("eventId", "event-1", "quantity", 1))
+                .expectStatus().isEqualTo(503)
+                .expectHeader().valueEquals("Retry-After", "1")
+                .expectBody().jsonPath("$.code").isEqualTo("TIMEOUT");
     }
 
     @Test

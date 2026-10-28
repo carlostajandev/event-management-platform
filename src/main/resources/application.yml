@@ -6,6 +6,9 @@ spring:
     default: api
   main:
     banner-mode: off
+  codec:
+    # Requests are small JSON documents; reject anything larger early (resource abuse).
+    max-in-memory-size: 16KB
 
 ticketing:
   aws:

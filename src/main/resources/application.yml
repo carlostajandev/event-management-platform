@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: ticketing-platform
+  profiles:
+    # Each process runs exactly one role: api (HTTP) or worker (queue, outbox relay, expiry job).
+    default: api
+  main:
+    banner-mode: off
+
+ticketing:
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    dynamodb-endpoint: ${DYNAMODB_ENDPOINT:}
+    api-call-timeout: 2s
+    api-call-attempt-timeout: 500ms
+  tables:
+    events: ${TABLE_EVENTS:ticketing-events}
+    orders: ${TABLE_ORDERS:ticketing-orders}
+    idempotency: ${TABLE_IDEMPOTENCY:ticketing-idempotency}
+    audit: ${TABLE_AUDIT:ticketing-audit}
+    outbox: ${TABLE_OUTBOX:ticketing-outbox}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: true

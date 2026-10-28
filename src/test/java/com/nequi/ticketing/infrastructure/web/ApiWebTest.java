@@ -28,6 +28,7 @@ import com.nequi.ticketing.domain.model.OrderId;
 import com.nequi.ticketing.domain.model.TicketState;
 import com.nequi.ticketing.domain.model.UserId;
 import com.nequi.ticketing.infrastructure.config.ApiProperties;
+import com.nequi.ticketing.infrastructure.config.ValidationConfig;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.TransactionContentionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -64,7 +65,7 @@ import static org.mockito.Mockito.when;
         "ticketing.api.per-user.requests-per-second=0",
         "ticketing.api.per-client-ip.requests-per-second=0"})
 @EnableConfigurationProperties(ApiProperties.class)
-@Import(HeaderCurrentCaller.class)
+@Import({HeaderCurrentCaller.class, ValidationConfig.class})
 @ActiveProfiles("api")
 class ApiWebTest {
 
@@ -120,11 +121,15 @@ class ApiWebTest {
     void anOrderRequiresAnIdempotencyKeyACallerAndAValidBody() {
         client.post().uri("/api/v1/orders").header("X-User-Id", "user-1").contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("eventId", "event-1", "quantity", 1))
-                .exchange().expectStatus().isBadRequest();
+                .exchange().expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("BAD_REQUEST");
         postOrder(null, "key-1", Map.of("eventId", "event-1", "quantity", 1))
                 .expectStatus().isUnauthorized()
                 .expectBody().jsonPath("$.code").isEqualTo("CALLER_NOT_IDENTIFIED");
-        postOrder("user-1", "key-1", Map.of("eventId", "event-1", "quantity", 7)).expectStatus().isBadRequest();
+        postOrder("user-1", "key-1", Map.of("eventId", "event-1", "quantity", 7)).expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("BAD_REQUEST")
+                .jsonPath("$.errors[0]").isEqualTo("quantity: must be less than or equal to 6");
         postOrder("user-1", "key-1", Map.of("eventId", "", "quantity", 1)).expectStatus().isBadRequest();
         client.post().uri("/api/v1/orders").header("X-User-Id", "user-1").header("Idempotency-Key", "k")
                 .contentType(MediaType.APPLICATION_JSON).bodyValue("{not json")

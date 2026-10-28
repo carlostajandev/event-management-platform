@@ -14,11 +14,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.reactive.result.method.annotation.ResponseEntityExceptionHandler;
+import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Mono;
 import software.amazon.awssdk.core.exception.SdkClientException;
 
 /**
@@ -81,6 +85,27 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(body(HttpStatus.SERVICE_UNAVAILABLE, "TIMEOUT",
                         "The request did not complete in time and may have been applied; "
                                 + "retry with the same Idempotency-Key to get its result"));
+    }
+
+    /**
+     * Framework errors get a code as well (the status name, e.g. {@code BAD_REQUEST}), and failed bean validation
+     * lists the offending fields, so clients never have to parse {@code detail}.
+     */
+    @Override
+    protected Mono<ResponseEntity<Object>> handleExceptionInternal(Exception exception, Object body, HttpHeaders headers,
+                                                                  HttpStatusCode status, ServerWebExchange exchange) {
+        return super.handleExceptionInternal(exception, body, headers, status, exchange).map(response -> {
+            if (response.getBody() instanceof ProblemDetail problem) {
+                HttpStatus resolved = HttpStatus.resolve(response.getStatusCode().value());
+                problem.setProperty("code", resolved == null ? "ERROR" : resolved.name());
+                if (exception instanceof WebExchangeBindException binding) {
+                    problem.setProperty("errors", binding.getFieldErrors().stream()
+                            .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                            .toList());
+                }
+            }
+            return response;
+        });
     }
 
     private static ResponseEntity<ProblemDetail> problem(HttpStatus status, String code, String detail) {

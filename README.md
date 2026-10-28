@@ -1,181 +1,62 @@
-<div align="center">
+# Ticketing Platform v3
 
-# Event Management Platform v2
+Reactive ticketing backend for high-demand ticket releases: Java 25, Spring Boot 4, WebFlux,
+DynamoDB and SQS. One deployable that runs as two independently scalable roles.
 
-**Reactive ticketing platform — Microservices Monorepo**
-**Technical assessment for Nequi (Staff/Senior level)**
+> **Status:** v3 in progress on branch `v3/modular-monolith`. The previous microservices version is
+> preserved under the tag [`v2-final`](../../tree/v2-final). The full README (API usage, diagrams,
+> limitations) lands with the final phase.
 
-[![CI/CD](https://github.com/carlostajandev/event-management-platform/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/carlostajandev/event-management-platform/actions)
-![Java](https://img.shields.io/badge/Java-25-orange)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.3-green)
-![Architecture](https://img.shields.io/badge/Architecture-Microservices-blue)
-![Tests](https://img.shields.io/badge/tests-44%2B%20passing-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-%E2%89%A590%25-brightgreen)
+## Architecture at a glance
 
-</div>
-
----
-
-## Architecture
-
-```
-event-management-platform/
-├── shared/
-│   ├── domain/           ← Java 25 Records, Ports, Domain Events (zero framework deps)
-│   └── infrastructure/   ← DynamoDB/SQS config, MDC filter, error handler
-├── services/
-│   ├── event-service/    ← port 8081 — CRUD events + atomic inventory counter
-│   ├── reservation-service/ ← port 8082 — conditional writes + TTL expiry
-│   ├── order-service/    ← port 8083 — transactional outbox + idempotency
-│   └── consumer-service/ ← port 8084 — @SqsListener + OutboxPoller + audit
-├── infrastructure/
-│   ├── docker-compose.yml  ← full stack including Prometheus + Grafana
-│   ├── terraform/          ← IaC for AWS (VPC, DynamoDB, SQS, ECS Fargate, IAM)
-│   └── localstack/         ← init-aws.sh (tables + queues on startup)
-└── docs/
-    ├── architecture/ARCHITECTURE.md
-    ├── sequence-diagram.md
-    ├── state-machine.md
-    └── data-model.md
-```
-
-## Quickstart (Local)
-
-```bash
-# 1. Start LocalStack + all services + observability stack
-docker compose -f infrastructure/docker-compose.yml up -d
-
-# 2. Verify health
-curl http://localhost:8081/actuator/health  # event-service
-curl http://localhost:8082/actuator/health  # reservation-service
-curl http://localhost:8083/actuator/health  # order-service
-curl http://localhost:8084/actuator/health  # consumer-service
-
-# 3. Grafana dashboard → http://localhost:3000 (admin/admin)
-# 4. Prometheus        → http://localhost:9090
-```
-
-## Run Unit Tests
-
-```bash
-# All 4 services — no Docker required (<30s)
-./mvnw test
-
-# With integration tests (requires Docker)
-./mvnw verify
-
-# Single service
-./mvnw test -pl services/event-service
-```
-
-## API Quick Reference
-
-### Create Event
-```bash
-curl -X POST http://localhost:8081/api/v1/events \
-  -H "Content-Type: application/json" \
-  -H "X-Correlation-Id: $(uuidgen)" \
-  -d '{
-    "name": "Rock Fest 2026",
-    "description": "Annual rock music festival",
-    "venue": {"name":"Movistar Arena","address":"Cra 37","city":"Bogotá","country":"Colombia","capacity":5000},
-    "eventDate": "2026-12-15T20:00:00Z",
-    "ticketPrice": 150000.00,
-    "currency": "COP",
-    "totalCapacity": 100
-  }'
-```
-
-### Reserve Tickets (atomic conditional write)
-```bash
-curl -X POST http://localhost:8082/api/v1/reservations \
-  -H "Content-Type: application/json" \
-  -d '{"eventId": "<eventId>", "userId": "user-123", "seatsCount": 2}'
-```
-
-### Create Order (idempotent)
-```bash
-curl -X POST http://localhost:8083/api/v1/orders \
-  -H "Content-Type: application/json" \
-  -H "X-Idempotency-Key: $(uuidgen)" \
-  -d '{"reservationId": "<reservationId>", "userId": "user-123"}'
-```
-
-### Query Order Status
-```bash
-curl http://localhost:8083/api/v1/orders/<orderId>
-```
-
-## Key Design Decisions
-
-### 1. No Overselling — Conditional Writes
-DynamoDB `UpdateItem` with `ConditionExpression: availableCount >= :n AND version = :expected`.
-On `ConditionalCheckFailedException`: `retryWhen(Retry.backoff(3, 100ms))` → 409 Conflict.
-
-**Why not distributed locks (Redis)?**
-No external lock service, no SPOF. DynamoDB handles atomicity natively. O(1) regardless of concurrency.
-
-### 2. Transactional Outbox — Zero Zombie Orders
-`order-service` writes order + outbox message in a single `TransactWriteItems` call.
-If SQS is down, the OutboxPoller (consumer-service) retries every 5 seconds until SQS recovers.
-
-**Without outbox (old code):** `save(order)` then `publish(message)` → if SQS fails, order is PENDING forever.
-**With outbox:** atomicity guaranteed — either both succeed or both fail.
-
-### 3. TTL-Based Reservation Expiry — O(1) vs O(table)
-`ttl = now + 600 seconds` (epoch). DynamoDB auto-deletes expired items at zero compute cost.
-In production: DynamoDB Streams → Lambda releases inventory.
-In local dev (LocalStack): reconciliation scheduler queries GSI `STATUS#ACTIVE / expiresAt <= now` — O(results), not O(table).
-
-**Why not @Scheduled + scan?**
-Old code scanned the entire table on every cycle. O(table) = unusable at scale.
-New code queries a GSI with a sort key range condition. O(results) = scales to millions.
-
-### 4. Idempotency — No Duplicate Orders
-`X-Idempotency-Key` header (client UUID) cached in `emp-idempotency-keys` with 24h TTL.
-Duplicate request → cached response returned immediately. No business logic re-executed.
-
-### 5. AuditService — Fully Integrated
-Every state transition (NONE→ACTIVE, ACTIVE→CONFIRMED, PENDING→CONFIRMED) writes to `emp-audit`.
-Previously: AuditService was implemented but never called. Now: called in reservation-service and consumer-service on every state change.
-
-### 6. Java 25 Features Used
-- **Records**: all domain models and DTOs (immutable, no Lombok needed)
-- **Pattern Matching Switch**: `GlobalErrorHandler`, `DomainEvent` routing
-- **Sealed Interfaces**: `DomainEvent` with permits clause — exhaustive switch without default
-- **Virtual Threads**: `spring.threads.virtual.enabled: true` in all services
-
-## Observability
-
-| Metric | Type | Service |
+| Role | Responsibility | Scales on |
 |---|---|---|
-| `events.created.total` | Counter | event-service |
-| `event.available_tickets{eventId}` | Gauge | event-service |
-| `tickets.reserved.total` | Counter | reservation-service |
-| `reservations.cancelled.total` | Counter | reservation-service |
-| `reservation.expired.released` | Counter | reservation-service |
-| `orders.created.total` | Counter | order-service |
-| `orders.processed.total` | Counter | consumer-service |
-| `order.processing.duration` | Timer | consumer-service |
+| `api` | Reactive HTTP API (events, orders, availability) | Request load |
+| `worker` | SQS consumer, outbox relay, expiry of holds | Queue depth |
 
-All logs are structured JSON (logstash-logback-encoder) with `traceId` (from `X-Correlation-Id` header) for distributed tracing in CloudWatch/ELK.
+- Clean Architecture: `domain` → `application` → `infrastructure`, enforced by an ArchUnit test.
+- Every ticket state transition is a single DynamoDB `TransactWriteItems`: the state change
+  (conditional on the expected state), inventory counters and the audit record commit together.
+- Ticket states follow the spec: `AVAILABLE`, `RESERVED`, `PENDING_CONFIRMATION`, `SOLD`, `COMPLIMENTARY`.
 
-## Infrastructure (Terraform)
+Design decisions are recorded in [`docs/adr`](docs/adr):
+
+| ADR | Decision |
+|---|---|
+| [0001](docs/adr/0001-v3-scope.md) | From four services sharing tables to one deployable with two roles |
+| [0002](docs/adr/0002-purchase-flow.md) | Hold tickets and enqueue in one transaction; the consumer validates the hold |
+| [0003](docs/adr/0003-authentication-out-of-scope.md) | Authentication out of scope, behind a port |
+| [0004](docs/adr/0004-no-circuit-breaker-on-dynamodb.md) | No circuit breaker around DynamoDB |
+| [0005](docs/adr/0005-local-aws-emulators.md) | DynamoDB Local and ElasticMQ instead of LocalStack |
+
+## Run locally
+
+Requirements: Docker with Compose v2.
 
 ```bash
-cd infrastructure/terraform
-
-# Dev environment
-terraform init
-terraform plan -var-file=environments/dev.tfvars
-terraform apply -var-file=environments/dev.tfvars
-
-# Resources created:
-# - VPC multi-AZ with private subnets + NAT Gateway
-# - 6 DynamoDB tables (PAY_PER_REQUEST, TTL, PITR, encryption)
-# - 2 SQS queues (purchase-orders + DLQ, long polling, KMS)
-# - IAM roles (execution + task, least-privilege)
-# - ECS Fargate cluster + ALB (4 services, rolling deploy)
+docker compose up -d --build --wait
 ```
 
+| Service | URL |
+|---|---|
+| API role | http://localhost:8080 |
+| Worker role | http://localhost:8081 |
+| DynamoDB Local | http://localhost:8000 |
+| ElasticMQ (SQS) | http://localhost:9324 (UI http://localhost:9325) |
 
+```bash
+curl localhost:8080/actuator/health/readiness   # {"status":"UP"} once all tables are ACTIVE
+curl localhost:8080/actuator/info               # {"role":"api"}
+curl localhost:8081/actuator/info               # {"role":"worker"}
+docker compose down                             # stops everything; DynamoDB Local data is in memory
+```
+
+The AWS credentials in `docker-compose.yml` are dummy values; the local emulators do not validate them.
+
+## Build and test
+
+Requirements: JDK 25 (`sdk env install` picks the version in `.sdkmanrc`).
+
+```bash
+./mvnw verify    # unit, slice and architecture tests + 90% line coverage gate (JaCoCo)
+```

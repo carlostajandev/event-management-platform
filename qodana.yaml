@@ -14,9 +14,7 @@ version: "1.0"
 profile:
   name: qodana.starter
 
-# Multi-module monorepo — analyse all 4 services and shared modules
-# Modules: shared/domain, shared/infrastructure, services/event-service,
-#          services/reservation-service, services/order-service, services/consumer-service
+# Single-module project (src/main, src/test)
 
 #Enable inspections
 #include:

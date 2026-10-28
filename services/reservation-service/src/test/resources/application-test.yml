@@ -1,3 +1,0 @@
-scheduler:
-  reservation-expiry:
-    enabled: false

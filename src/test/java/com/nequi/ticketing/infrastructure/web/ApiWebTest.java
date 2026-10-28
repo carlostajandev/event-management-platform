@@ -27,6 +27,7 @@ import com.nequi.ticketing.domain.model.Order;
 import com.nequi.ticketing.domain.model.OrderId;
 import com.nequi.ticketing.domain.model.TicketState;
 import com.nequi.ticketing.domain.model.UserId;
+import com.nequi.ticketing.infrastructure.config.ApiProperties;
 import com.nequi.ticketing.infrastructure.persistence.dynamodb.TransactionContentionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,6 +35,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -57,7 +59,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@WebFluxTest(controllers = {EventController.class, OrderController.class})
+// Rate limits are covered by RequestProtectionFilterTest; here they would make results depend on test order.
+@WebFluxTest(controllers = {EventController.class, OrderController.class}, properties = {
+        "ticketing.api.per-user.requests-per-second=0",
+        "ticketing.api.per-client-ip.requests-per-second=0"})
+@EnableConfigurationProperties(ApiProperties.class)
 @Import(HeaderCurrentCaller.class)
 @ActiveProfiles("api")
 class ApiWebTest {

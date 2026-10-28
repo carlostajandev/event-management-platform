@@ -53,6 +53,10 @@ services:
       SPRING_PROFILES_ACTIVE: api
       DYNAMODB_ENDPOINT: http://dynamodb:8000
       SPRING_CLOUD_AWS_SQS_ENDPOINT: http://sqs:9324
+      # Sized for DynamoDB Local (~40 transactions/s): 16 in flight keeps queueing under the 500 ms attempt timeout.
+      MAX_IN_FLIGHT_REQUESTS: ${MAX_IN_FLIGHT_REQUESTS:-16}
+      # A load test sends everything from one address; RATE_LIMIT_IP_RPS=0 turns the per-address limit off.
+      RATE_LIMIT_IP_RPS: ${RATE_LIMIT_IP_RPS:-100}
     ports:
       - "8080:8080"
 

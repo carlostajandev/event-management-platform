@@ -52,7 +52,7 @@ A review of v2 against the assessment spec found two kinds of problems:
 | Optimistic locking or conditional writes | Both, on the whole item | Conditional writes on the invariant only |
 | Clean Architecture, SOLID, English code | Yes (per service) | Yes, single module tree; ArchUnit test forbids Spring/AWS imports in `domain` |
 | Tests ≥ 90% incl. concurrency | JaCoCo gate; concurrency IT | Same gate; concurrency ITs for reserve, confirm and expire |
-| `docker-compose.yml` | Yes | LocalStack (DynamoDB + SQS) + `api` + `worker` |
+| `docker-compose.yml` | Yes | DynamoDB Local + ElasticMQ (ADR 0005) + `api` + `worker` |
 | Terraform (differentiator) | Modular | Kept; two ECS services from one image, VPC endpoints, IAM per role |
 
 ## Decision
@@ -66,7 +66,7 @@ A review of v2 against the assessment spec found two kinds of problems:
 2. **Clean Architecture inside one module tree:** `domain` → `application` → `infrastructure`.
 3. **Every state transition is one `TransactWriteItems`:** state change conditional on the expected
    `from` state + inventory counters + audit record (+ outbox item when a message is needed).
-4. **Keep** what earned its place in v2: outbox, GSI on `status#expiresAt`, TTL, DLQ, JaCoCo gate,
+4. **Keep** what earned its place in v2: outbox, a sparse GSI on hold status and expiry (`holds-by-expiry`), TTL, DLQ, JaCoCo gate,
    Terraform, Testcontainers concurrency tests.
 5. **Remove** what does not: per-domain services, version-based locking, MDC, unjustified virtual
    threads, circuit breaker around DynamoDB (ADR 0004).
@@ -87,7 +87,8 @@ A review of v2 against the assessment spec found two kinds of problems:
 - The real scaling limit is the hot inventory item in DynamoDB, not the number of processes. It is
   measured in the load test and addressed as a documented improvement (sharded counters or a virtual
   waiting room).
-- `docs/architecture`, `docs/decisions` and `docs/diagrams` describe v2 and will be rewritten for v3.
+- The v2 documents (`docs/architecture`, `docs/decisions`, `docs/diagrams`) were replaced by
+  `docs/architecture.md`; they remain in the `v2-final` tag.
 
 ## What would change in production
 

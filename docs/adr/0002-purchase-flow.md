@@ -47,7 +47,7 @@ POST /api/v1/orders/{id}/confirm   (simulated payment)
     Put    audit
   order still RESERVED -> 409 "order is being processed" (client polls GET /orders/{id})
 
-worker: expiry job (@Scheduled, GSI status#expiresAt)
+worker: expiry job (@Scheduled, sparse GSI holds-by-expiry: holdStatus + expiresAt)
   for RESERVED | PENDING_CONFIRMATION with expiresAt <= now:
   TransactWriteItems:
     Update order       -> AVAILABLE                            IF status = :from
@@ -68,9 +68,12 @@ not counted as revenue.
   expired reports `AVAILABLE` (its tickets went back to the pool), with the reason in the audit trail.
 - **Races are settled by conditions, not by locks.** The consumer, `/confirm` and the expiry job all
   condition on the expected `from` state (and on `expiresAt` where relevant), so exactly one wins.
-- **Retries:** only on `TransactionConflict` cancellation reasons, inside `Mono.defer`, with jittered
-  backoff (3 attempts). `ConditionalCheckFailed` on the inventory → `409 SOLD_OUT`; on the idempotency
-  item → replay the stored response, or `422` if the request hash differs.
+- **Retries:** only on transient cancellation reasons (`TransactionConflict`, `ThrottlingError`,
+  `ProvisionedThroughputExceeded`), inside `Mono.defer`, with jittered backoff (5 retries, 10–200 ms);
+  exhausted retries answer `503 CONTENTION`. `ConditionalCheckFailed` is never retried: on the inventory →
+  `409 SOLD_OUT`; on the idempotency item → replay the stored response, or `422` if the request hash differs.
+  *(Implementation note: the first draft said 3 attempts on `TransactionConflict` only; throttling was added
+  because it is equally transient.)*
 - **Invariant:** `available + reserved + pendingConfirmation + sold + complimentary = total`.
 
 ## Alternatives considered

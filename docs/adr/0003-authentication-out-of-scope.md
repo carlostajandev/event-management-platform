@@ -15,8 +15,9 @@ key rotation, tests) would take time away from the parts the spec does evaluate.
 - The header is read in **one place only**, behind a port:
 
   ```java
-  public interface CurrentUserProvider {
-      Mono<UserId> currentUser(ServerWebExchange exchange);
+  public interface CurrentCaller {
+      Mono<UserId> user(ServerWebExchange exchange);
+      Mono<Void> requireAdmin(ServerWebExchange exchange);
   }
   ```
 
@@ -27,7 +28,7 @@ key rotation, tests) would take time away from the parts the spec does evaluate.
 - Admin operations (create event, complimentary tickets) are guarded by a static role header in local
   mode and documented as such.
 - Controls that do not depend on identity are implemented: mandatory `Idempotency-Key`, max tickets per
-  order, request size limits, validation, rate limiting per user header and per IP.
+  order, request size limits, validation, rate limiting per user header and per IP (`RequestProtectionFilter`; in AWS the per-IP limit is a WAF rule).
 
 ## Consequences
 
@@ -39,4 +40,4 @@ key rotation, tests) would take time away from the parts the spec does evaluate.
 - Spring Security OAuth2 resource server validating JWTs from Amazon Cognito; `UserId` taken from the
   `sub` claim, admin from a Cognito group.
 - AWS WAF rate-based rules in front of the ALB and API Gateway usage plans if exposed to partners.
-- The `CurrentUserProvider` adapter is the only class that changes.
+- The `CurrentCaller` adapter (`HeaderCurrentCaller` today) is the only class that changes.

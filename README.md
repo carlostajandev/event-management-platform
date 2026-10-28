@@ -29,6 +29,9 @@ Design decisions are recorded in [`docs/adr`](docs/adr):
 | [0004](docs/adr/0004-no-circuit-breaker-on-dynamodb.md) | No circuit breaker around DynamoDB |
 | [0005](docs/adr/0005-local-aws-emulators.md) | DynamoDB Local and ElasticMQ instead of LocalStack |
 
+Security controls (secrets, idempotency, malicious retries, resource abuse) are mapped to their code in
+[`docs/security/SECURITY.md`](docs/security/SECURITY.md). Load test results: [`load-test/RESULTS.md`](load-test/RESULTS.md).
+
 ## Run locally
 
 Requirements: Docker with Compose v2.

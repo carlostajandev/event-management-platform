@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Creates the local DynamoDB tables. Mirrors the tables defined in Terraform.
+# Timestamps used as sort keys are epoch milliseconds (N) so they order numerically.
 set -euo pipefail
 
 DDB="aws dynamodb --endpoint-url ${DYNAMODB_ENDPOINT} --region ${AWS_REGION} --no-cli-pager"
@@ -29,7 +30,7 @@ enable_ttl() {
 # GSI "events-by-date" lists events ordered by date.
 create_table ticketing-events \
   --attribute-definitions AttributeName=PK,AttributeType=S AttributeName=SK,AttributeType=S \
-                          AttributeName=listingKey,AttributeType=S AttributeName=eventDate,AttributeType=S \
+                          AttributeName=listingKey,AttributeType=S AttributeName=eventDate,AttributeType=N \
   --key-schema AttributeName=PK,KeyType=HASH AttributeName=SK,KeyType=RANGE \
   --global-secondary-indexes '[{"IndexName":"events-by-date",
       "KeySchema":[{"AttributeName":"listingKey","KeyType":"HASH"},{"AttributeName":"eventDate","KeyType":"RANGE"}],
@@ -39,7 +40,7 @@ create_table ticketing-events \
 # carry holdStatus, so the expiry job queries O(expired holds), never the whole table.
 create_table ticketing-orders \
   --attribute-definitions AttributeName=PK,AttributeType=S \
-                          AttributeName=holdStatus,AttributeType=S AttributeName=expiresAt,AttributeType=S \
+                          AttributeName=holdStatus,AttributeType=S AttributeName=expiresAt,AttributeType=N \
   --key-schema AttributeName=PK,KeyType=HASH \
   --global-secondary-indexes '[{"IndexName":"holds-by-expiry",
       "KeySchema":[{"AttributeName":"holdStatus","KeyType":"HASH"},{"AttributeName":"expiresAt","KeyType":"RANGE"}],
@@ -59,7 +60,7 @@ create_table ticketing-audit \
 # Outbox. Sparse GSI "pending-by-time": only unpublished messages carry pendingKey.
 create_table ticketing-outbox \
   --attribute-definitions AttributeName=PK,AttributeType=S \
-                          AttributeName=pendingKey,AttributeType=S AttributeName=createdAt,AttributeType=S \
+                          AttributeName=pendingKey,AttributeType=S AttributeName=createdAt,AttributeType=N \
   --key-schema AttributeName=PK,KeyType=HASH \
   --global-secondary-indexes '[{"IndexName":"pending-by-time",
       "KeySchema":[{"AttributeName":"pendingKey","KeyType":"HASH"},{"AttributeName":"createdAt","KeyType":"RANGE"}],

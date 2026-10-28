@@ -50,7 +50,9 @@ management:
         enabled: true
       group:
         readiness:
-          include: readinessState,dynamoDb
+          # Shallow on purpose: a slow DynamoDB must not take every instance out of the load balancer at once.
+          # DynamoDB status stays in /actuator/health.
+          include: readinessState
   info:
     env:
       enabled: true

@@ -45,7 +45,8 @@ docker compose up -d --build --wait
 | ElasticMQ (SQS) | http://localhost:9324 (UI http://localhost:9325) |
 
 ```bash
-curl localhost:8080/actuator/health/readiness   # {"status":"UP"} once all tables are ACTIVE
+curl localhost:8080/actuator/health/readiness   # {"status":"UP"} once the app can serve traffic
+curl localhost:8080/actuator/health             # DOWN if a DynamoDB table is missing or not ACTIVE
 curl localhost:8080/actuator/info               # {"role":"api"}
 curl localhost:8081/actuator/info               # {"role":"worker"}
 docker compose down                             # stops everything; DynamoDB Local data is in memory

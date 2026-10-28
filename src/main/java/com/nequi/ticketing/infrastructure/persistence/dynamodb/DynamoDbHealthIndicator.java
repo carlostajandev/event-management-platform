@@ -15,7 +15,8 @@ import java.util.TreeMap;
 
 /**
  * Reports UP only when every table the application uses exists and is ACTIVE.
- * Part of the readiness group, so a process is not routed traffic before its tables are reachable.
+ * Part of /actuator/health for monitoring, but not of the readiness group: DynamoDB is shared by every instance,
+ * so a slow or throttled table would mark the whole fleet unready at once and the load balancer would drain it.
  */
 @Component
 class DynamoDbHealthIndicator extends AbstractReactiveHealthIndicator {
@@ -33,7 +34,8 @@ class DynamoDbHealthIndicator extends AbstractReactiveHealthIndicator {
     @Override
     protected Mono<Health> doHealthCheck(Health.Builder builder) {
         return Flux.fromIterable(tables)
-                .flatMap(this::tableStatus)
+                // Delay errors so a failed call does not cancel the others and drop their errors.
+                .flatMapDelayError(this::tableStatus, tables.size(), 1)
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue, TreeMap::new)
                 .map(statuses -> {
                     boolean allActive = statuses.values().stream().allMatch(TableStatus.ACTIVE::equals);

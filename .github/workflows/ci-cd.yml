@@ -1,5 +1,6 @@
-# Build, test and smoke-test the stack. Terraform validation and image publishing are added with the
-# infrastructure (Phase 7).
+# Secret scan, build and test, compose smoke test and Terraform checks on every push and pull request.
+# Deploys run on main only, once the AWS side exists (repository variable DEPLOY_ENABLED=true): dev first,
+# then prod behind the approval rules of the GitHub "prod" environment.
 name: CI
 
 on:
@@ -74,3 +75,84 @@ jobs:
       - name: Stop stack
         if: always()
         run: docker compose down
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Validate
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Module tests (mock provider, no AWS account needed)
+        run: |
+          for module in modules/*/; do
+            if [ -d "$module/tests" ]; then
+              (cd "$module" && terraform init -backend=false -input=false > /dev/null && terraform test)
+            fi
+          done
+
+      - name: Security scan (Checkov; accepted findings are justified inline)
+        run: >-
+          docker run --rm -v "$PWD:/tf" bridgecrew/checkov:3.2.500
+          -d /tf --framework terraform --compact --quiet --skip-path /tf/.terraform
+
+  deploy:
+    name: Deploy (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    needs: [secrets, build, smoke, terraform]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    strategy:
+      max-parallel: 1 # dev, then prod
+      fail-fast: true
+      matrix:
+        environment: [dev, prod]
+    environment: ${{ matrix.environment }}
+    permissions:
+      contents: read
+      id-token: write # OIDC: short-lived AWS credentials, no stored keys
+    env:
+      NAME: ticketing-${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image (immutable tag = commit)
+        run: |
+          IMAGE="${{ steps.ecr.outputs.registry }}/$NAME:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Roll both services to the new image
+        run: |
+          for role in api worker; do
+            aws ecs describe-task-definition --task-definition "$NAME-$role" --query taskDefinition > current.json
+            jq --arg image "$IMAGE" '.containerDefinitions[0].image = $image
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+              current.json > next.json
+            arn=$(aws ecs register-task-definition --cli-input-json file://next.json --query taskDefinition.taskDefinitionArn --output text)
+            aws ecs update-service --cluster "$NAME" --service "$NAME-$role" --task-definition "$arn" > /dev/null
+          done
+          # The deployment circuit breaker rolls back on its own if the new tasks never become healthy.
+          aws ecs wait services-stable --cluster "$NAME" --services "$NAME-api" "$NAME-worker"

@@ -1,47 +1,86 @@
-variable "project_name" {
-  description = "Project name prefix for all AWS resources"
-  type        = string
-  default     = "emp"
+variable "project" {
+  type    = string
+  default = "ticketing"
 }
 
 variable "environment" {
-  description = "Deployment environment (dev, staging, prod)"
+  description = "dev or prod. Ideally each lives in its own AWS account; names are prefixed either way."
   type        = string
+
   validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be dev, staging, or prod"
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be dev or prod."
   }
 }
 
-variable "aws_region" {
-  description = "AWS region for all resources"
-  type        = string
-  default     = "us-east-1"
+variable "region" {
+  type    = string
+  default = "us-east-1"
 }
 
 variable "vpc_cidr" {
-  description = "VPC CIDR block"
-  type        = string
-  default     = "10.0.0.0/16"
+  type = string
 }
 
-variable "ecr_registry" {
-  description = "ECR registry URL (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com)"
+variable "image_tag" {
+  description = "Image deployed when Terraform creates the services. Later deploys come from CI."
   type        = string
 }
 
-variable "service_image_tags" {
-  description = "Docker image tags for each microservice"
+variable "certificate_arn" {
+  description = "ACM certificate for HTTPS on the ALB. Empty serves HTTP."
+  type        = string
+  default     = ""
+}
+
+variable "waf_requests_per_5_minutes_per_ip" {
+  type = number
+}
+
+variable "api" {
   type = object({
-    event_service       = string
-    reservation_service = string
-    order_service       = string
-    consumer_service    = string
+    cpu                    = number
+    memory                 = number
+    min_tasks              = number
+    max_tasks              = number
+    requests_per_target    = number
+    max_in_flight_requests = number
+    rate_limit_user_rps    = number
   })
-  default = {
-    event_service       = "latest"
-    reservation_service = "latest"
-    order_service       = "latest"
-    consumer_service    = "latest"
-  }
+}
+
+variable "worker" {
+  type = object({
+    cpu               = number
+    memory            = number
+    min_tasks         = number
+    max_tasks         = number
+    backlog_scale_out = number
+  })
+}
+
+variable "log_retention_days" {
+  type = number
+}
+
+variable "container_insights" {
+  type = bool
+}
+
+variable "protect_data" {
+  description = "PITR, deletion protection on tables and the ALB."
+  type        = bool
+}
+
+variable "alarm_email" {
+  type    = string
+  default = ""
+}
+
+variable "github_repository" {
+  type = string
+}
+
+variable "create_oidc_provider" {
+  type = bool
 }

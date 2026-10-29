@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: ticketing-platform
+  profiles:
+    # Each process runs exactly one role: api (HTTP) or worker (queue, outbox relay, expiry job).
+    default: api
+  main:
+    banner-mode: off
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:us-east-1}
+      sqs:
+        listener:
+          max-concurrent-messages: 10
+          max-messages-per-poll: 10
+          # Long polling; also bounds how long shutdown waits for an in-flight poll.
+          poll-timeout: 10s
+  codec:
+    # Requests are small JSON documents; reject anything larger early (resource abuse).
+    max-in-memory-size: 16KB
+
+ticketing:
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    dynamodb-endpoint: ${DYNAMODB_ENDPOINT:}
+    api-call-timeout: 2s
+    api-call-attempt-timeout: 500ms
+  tables:
+    events: ${TABLE_EVENTS:ticketing-events}
+    orders: ${TABLE_ORDERS:ticketing-orders}
+    idempotency: ${TABLE_IDEMPOTENCY:ticketing-idempotency}
+    audit: ${TABLE_AUDIT:ticketing-audit}
+    outbox: ${TABLE_OUTBOX:ticketing-outbox}
+  api:
+    # Little's law: 64 in flight at ~30 ms per DynamoDB transaction allows ~2,000 req/s per instance.
+    max-in-flight-requests: ${MAX_IN_FLIGHT_REQUESTS:64}
+    per-user:
+      # A person buying tickets; scripted clients get 429.
+      requests-per-second: ${RATE_LIMIT_USER_RPS:5}
+      burst: 10
+    per-client-ip:
+      requests-per-second: ${RATE_LIMIT_IP_RPS:100}
+      burst: 200
+    max-tracked-clients: 100000
+  worker:
+    orders-queue: ${QUEUE_ORDERS:ticketing-orders}
+    outbox-poll-interval: 500ms
+    outbox-batch-size: 25
+    expiry-interval: 5s
+    expiry-batch-size: 200
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          # Shallow on purpose: a slow DynamoDB must not take every instance out of the load balancer at once.
+          # DynamoDB status stays in /actuator/health.
+          include: readinessState
+  info:
+    env:
+      enabled: true

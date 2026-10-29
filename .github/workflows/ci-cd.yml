@@ -1,319 +1,161 @@
-# ============================================================
-# CI/CD Pipeline — Event Management Platform v2
-#
-# Triggers:
-#   - Push to main or PR to main: build + test all 4 services
-#   - Push to main: Docker build + push to ECR (4 images)
-#   - Push tag v*: Docker push + manual approval + Terraform apply
-#
-# Jobs:
-#   1. build-shared  — install shared/domain and shared/infrastructure
-#   2. test          — matrix: 4 services in parallel with JaCoCo
-#   3. tf-validate   — terraform fmt check + validate (no credentials)
-#   4. docker        — build + push 4 ECR images (main/tags only)
-#   5. tf-plan       — terraform plan against staging
-#   6. deploy-prod   — terraform apply + ECS health check (tags only)
-# ============================================================
-
-name: CI/CD Pipeline
+# Secret scan, build and test, compose smoke test and Terraform checks on every push and pull request.
+# Deploys run on main only, once the AWS side exists (repository variable DEPLOY_ENABLED=true): dev first,
+# then prod behind the approval rules of the GitHub "prod" environment.
+name: CI
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    branches: [main, develop, 'v3/**']
   pull_request:
-    branches: [main]
 
-env:
-  AWS_REGION: us-east-1
-  JAVA_VERSION: '25'
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 1: Build shared modules (required by all services)
-  # ──────────────────────────────────────────────────────────
-  build-shared:
-    name: Build Shared Modules
+  secrets:
+    name: Secret scan
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: gitleaks (full history)
+        run: >-
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1
+          git /repo --redact --exit-code 1 --log-opts="--all"
+
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Java ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: '25'
           distribution: temurin
           cache: maven
 
-      - name: Install root POM
-        run: ./mvnw install -N -DskipTests --no-transfer-progress
+      - name: Verify (tests + 90% line coverage gate)
+        run: ./mvnw -B verify
 
-      - name: Install shared/domain and shared/infrastructure
-        run: ./mvnw install -pl shared/domain,shared/infrastructure -DskipTests --no-transfer-progress
-
-
-      - name: Cache shared modules for downstream jobs
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository/com/nequi
-          key: shared-modules-${{ github.sha }}
-          restore-keys: |
-            shared-modules-
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 2: Test — multi-service matrix (4 services in parallel)
-  # ──────────────────────────────────────────────────────────
-  test:
-    name: Test ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    needs: [build-shared]
-
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - event-service
-          - reservation-service
-          - order-service
-          - consumer-service
-
-    # No services: block — each *IT.java starts its own LocalStack via Testcontainers.
-    # Provisioning a CI-side LocalStack would be redundant and waste ~20s per job.
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Java ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: temurin
-          cache: maven
-
-      - name: Restore shared modules from cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository/com/nequi
-          key: shared-modules-${{ github.sha }}
-          restore-keys: |
-            shared-modules-
-
-      - name: Run unit and integration tests — ${{ matrix.service }}
-        run: |
-          ./mvnw verify -pl services/${{ matrix.service }} \
-            --no-transfer-progress \
-            -Dspring.profiles.active=test
-        env:
-          SPRING_PROFILES_ACTIVE: test
-
-      - name: Upload JaCoCo report
-        uses: actions/upload-artifact@v4
+      - name: Upload coverage report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: jacoco-${{ matrix.service }}
-          path: services/${{ matrix.service }}/target/site/jacoco/
-          retention-days: 7
+          name: jacoco-report
+          path: target/site/jacoco/
 
-  # ──────────────────────────────────────────────────────────
-  # JOB 3: Terraform Validate (no AWS credentials needed)
-  # ──────────────────────────────────────────────────────────
-  tf-validate:
-    name: Terraform Validate
+  smoke:
+    name: Compose smoke test
     runs-on: ubuntu-latest
-
+    needs: build
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "~> 1.7"
+      - name: Start stack and wait for healthy services
+        run: docker compose up -d --build --wait --wait-timeout 180
 
-      - name: Terraform fmt check
+      - name: A second up is idempotent (tables already exist)
+        run: docker compose up -d --wait --wait-timeout 120
+
+      - name: Both roles are ready
+        run: |
+          curl -fsS localhost:8080/actuator/health/readiness
+          curl -fsS localhost:8081/actuator/health/readiness
+          curl -fsS localhost:8080/actuator/info | grep -q '"role":"api"'
+          curl -fsS localhost:8081/actuator/info | grep -q '"role":"worker"'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
         working-directory: infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Format
         run: terraform fmt -check -recursive
 
-      - name: Terraform init (local — no backend)
-        working-directory: infrastructure/terraform
-        run: terraform init -backend=false
+      - name: Validate
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
 
-      - name: Terraform validate
-        working-directory: infrastructure/terraform
-        run: terraform validate
+      - name: Module tests (mock provider, no AWS account needed)
+        run: |
+          for module in modules/*/; do
+            if [ -d "$module/tests" ]; then
+              (cd "$module" && terraform init -backend=false -input=false > /dev/null && terraform test)
+            fi
+          done
 
-  # ──────────────────────────────────────────────────────────
-  # JOB 4: Docker Build + Push to ECR (4 images)
-  # Only on push to main or version tags
-  # ──────────────────────────────────────────────────────────
-  docker:
-    name: Docker — ${{ matrix.service }}
+      - name: Security scan (Checkov; accepted findings are justified inline)
+        run: >-
+          docker run --rm -v "$PWD:/tf" bridgecrew/checkov:3.2.500
+          -d /tf --framework terraform --compact --quiet --skip-path /tf/.terraform
+
+  deploy:
+    name: Deploy (${{ matrix.environment }})
     runs-on: ubuntu-latest
-    needs: [test, tf-validate]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-
+    needs: [secrets, build, smoke, terraform]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     strategy:
+      max-parallel: 1 # dev, then prod
+      fail-fast: true
       matrix:
-        service:
-          - event-service
-          - reservation-service
-          - order-service
-          - consumer-service
-
-    outputs:
-      image-tag: ${{ steps.meta.outputs.version }}
-
+        environment: [dev, prod]
+    environment: ${{ matrix.environment }}
+    permissions:
+      contents: read
+      id-token: write # OIDC: short-lived AWS credentials, no stored keys
+    env:
+      NAME: ticketing-${{ matrix.environment }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Java ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: temurin
-          cache: maven
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Build shared modules
-        run: ./mvnw install -pl shared/domain,shared/infrastructure -DskipTests --no-transfer-progress
-
-      - name: Package ${{ matrix.service }}
-        run: ./mvnw package -pl services/${{ matrix.service }} -DskipTests --no-transfer-progress
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
+      - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.login-ecr.outputs.registry }}/emp-${{ matrix.service }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=sha,prefix=sha-,format=short
-
-      - name: Build and push ${{ matrix.service }}
-        uses: docker/build-push-action@v5
-        with:
-          context: services/${{ matrix.service }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,scope=${{ matrix.service }},mode=max
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 5: Terraform Plan (staging)
-  # ──────────────────────────────────────────────────────────
-  tf-plan:
-    name: Terraform Plan (staging)
-    runs-on: ubuntu-latest
-    needs: [docker]
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "~> 1.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Terraform Init
-        working-directory: infrastructure/terraform
-        run: terraform init
-
-      - name: Terraform Plan
-        working-directory: infrastructure/terraform
+      - name: Build and push the image (immutable tag = commit)
         run: |
-          terraform plan \
-            -var-file=environments/staging.tfvars \
-            -out=tfplan \
-            -no-color
-        env:
-          TF_WORKSPACE: staging
+          IMAGE="${{ steps.ecr.outputs.registry }}/$NAME:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-staging
-          path: infrastructure/terraform/tfplan
-          retention-days: 5
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 6: Deploy Production (tags v* only — requires manual approval)
-  # ──────────────────────────────────────────────────────────
-  deploy-prod:
-    name: Deploy Production
-    runs-on: ubuntu-latest
-    needs: [docker]
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment:
-      name: production
-      url: https://ticketing.nequi.com
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "~> 1.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Terraform Init
-        working-directory: infrastructure/terraform
-        run: terraform init
-
-      - name: Terraform Apply (production)
-        working-directory: infrastructure/terraform
+      - name: Roll both services to the new image
         run: |
-          terraform apply \
-            -var-file=environments/production.tfvars \
-            -auto-approve \
-            -no-color
-        env:
-          TF_WORKSPACE: production
-
-      - name: Wait for ECS services stable
-        run: |
-          for service in emp-event-service emp-reservation-service emp-order-service emp-consumer-service; do
-            echo "Waiting for $service..."
-            aws ecs wait services-stable \
-              --cluster emp-prod-cluster \
-              --services $service \
-              --region ${{ env.AWS_REGION }}
+          for role in api worker; do
+            aws ecs describe-task-definition --task-definition "$NAME-$role" --query taskDefinition > current.json
+            jq --arg image "$IMAGE" '.containerDefinitions[0].image = $image
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+              current.json > next.json
+            arn=$(aws ecs register-task-definition --cli-input-json file://next.json --query taskDefinition.taskDefinitionArn --output text)
+            aws ecs update-service --cluster "$NAME" --service "$NAME-$role" --task-definition "$arn" > /dev/null
           done
-          echo "All 4 ECS services stable"
-
-      - name: Health check all services
-        run: |
-          ALB_DNS=$(terraform -chdir=infrastructure/terraform output -raw alb_dns_name)
-          for port in 8081 8082 8083 8084; do
-            STATUS=$(curl -sf "https://${ALB_DNS}/actuator/health" -H "X-Service-Port: $port" | jq -r '.status' || echo "DOWN")
-            echo "Port $port: $STATUS"
-            [ "$STATUS" = "UP" ] || exit 1
-          done
-          echo "All health checks passed"
+          # The deployment circuit breaker rolls back on its own if the new tasks never become healthy.
+          aws ecs wait services-stable --cluster "$NAME" --services "$NAME-api" "$NAME-worker"

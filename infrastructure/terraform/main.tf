@@ -1,72 +1,77 @@
-terraform {
-  required_version = ">= 1.7"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-
-  # Remote state — uncomment for team collaboration
-  # backend "s3" {
-  #   bucket = "nequi-emp-terraform-state"
-  #   key    = "event-management-platform/terraform.tfstate"
-  #   region = "us-east-1"
-  # }
+locals {
+  name = "${var.project}-${var.environment}"
 }
 
-provider "aws" {
-  region = var.aws_region
+module "network" {
+  source = "./modules/network"
 
-  default_tags {
-    tags = {
-      Project     = var.project_name
-      Environment = var.environment
-      ManagedBy   = "terraform"
-    }
-  }
+  name                    = local.name
+  region                  = var.region
+  cidr_block              = var.vpc_cidr
+  flow_log_retention_days = var.log_retention_days
 }
 
-# ── Modules ───────────────────────────────────────────────────────
+module "data" {
+  source = "./modules/data"
 
-module "networking" {
-  source       = "./modules/networking"
-  project_name = var.project_name
-  environment  = var.environment
-  vpc_cidr     = var.vpc_cidr
+  name         = local.name
+  protect_data = var.protect_data
 }
 
-module "dynamodb" {
-  source       = "./modules/dynamodb"
-  project_name = var.project_name
-  environment  = var.environment
+module "edge" {
+  source = "./modules/edge"
+
+  name                              = local.name
+  vpc_id                            = module.network.vpc_id
+  public_subnet_ids                 = module.network.public_subnet_ids
+  certificate_arn                   = var.certificate_arn
+  waf_requests_per_5_minutes_per_ip = var.waf_requests_per_5_minutes_per_ip
+  protect_data                      = var.protect_data
 }
 
-module "sqs" {
-  source       = "./modules/sqs"
-  project_name = var.project_name
-  environment  = var.environment
+module "compute" {
+  source = "./modules/compute"
+
+  name                    = local.name
+  region                  = var.region
+  vpc_id                  = module.network.vpc_id
+  private_subnet_ids      = module.network.private_subnet_ids
+  alb_security_group_id   = module.edge.alb_security_group_id
+  target_group_arn        = module.edge.target_group_arn
+  listener_arn            = module.edge.listener_arn
+  alb_request_count_label = "${module.edge.alb_arn_suffix}/${module.edge.target_group_arn_suffix}"
+  table_names             = module.data.table_names
+  table_arns              = module.data.table_arns
+  orders_queue_name       = module.data.orders_queue_name
+  orders_queue_arn        = module.data.orders_queue_arn
+  image_tag               = var.image_tag
+  api                     = var.api
+  worker                  = var.worker
+  log_retention_days      = var.log_retention_days
+  container_insights      = var.container_insights
 }
 
-module "iam" {
-  source              = "./modules/iam"
-  project_name        = var.project_name
-  environment         = var.environment
-  dynamodb_table_arns = module.dynamodb.table_arns
-  sqs_queue_arns      = module.sqs.queue_arns
+module "observability" {
+  source = "./modules/observability"
+
+  name                    = local.name
+  alarm_email             = var.alarm_email
+  alb_arn_suffix          = module.edge.alb_arn_suffix
+  target_group_arn_suffix = module.edge.target_group_arn_suffix
+  table_names             = module.data.table_names
+  orders_queue_name       = module.data.orders_queue_name
+  orders_dlq_name         = module.data.orders_dlq_name
 }
 
-module "ecs" {
-  source             = "./modules/ecs"
-  project_name       = var.project_name
-  environment        = var.environment
-  vpc_id             = module.networking.vpc_id
-  private_subnet_ids = module.networking.private_subnet_ids
-  public_subnet_ids  = module.networking.public_subnet_ids
-  task_role_arn      = module.iam.ecs_task_role_arn
-  execution_role_arn = module.iam.ecs_execution_role_arn
-  aws_region         = var.aws_region
-  service_image_tags = var.service_image_tags
-  ecr_registry       = var.ecr_registry
+module "ci" {
+  source = "./modules/ci"
+
+  name                 = local.name
+  github_repository    = var.github_repository
+  github_environment   = var.environment
+  create_oidc_provider = var.create_oidc_provider
+  ecr_repository_arn   = module.compute.ecr_repository_arn
+  cluster_name         = module.compute.cluster_name
+  service_names        = module.compute.service_names
+  pass_role_arns       = module.compute.role_arns
 }

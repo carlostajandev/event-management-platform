@@ -1,0 +1,71 @@
+# Local stack: DynamoDB Local + ElasticMQ (SQS) + the application in its two roles.
+# Start:  docker compose up -d --build
+# Stop:   docker compose down
+name: ticketing
+
+# Dummy credentials required by the AWS SDK; the local emulators do not validate them.
+x-local-aws: &local-aws
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: local
+  AWS_SECRET_ACCESS_KEY: local
+
+x-app: &app
+  build: .
+  image: ticketing-platform:local
+  depends_on:
+    dynamodb-init:
+      condition: service_completed_successfully
+    sqs:
+      condition: service_started
+  restart: unless-stopped
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:3.3.2
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "8000:8000"
+
+  dynamodb-init:
+    image: amazon/aws-cli:2.39.1
+    entrypoint: ["bash", "/init/dynamodb-init.sh"]
+    environment:
+      <<: *local-aws
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+    volumes:
+      - ./infrastructure/local/dynamodb-init.sh:/init/dynamodb-init.sh:ro
+    depends_on:
+      - dynamodb
+    restart: "no"
+
+  sqs:
+    image: softwaremill/elasticmq-native:1.7.1
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+    volumes:
+      - ./infrastructure/local/elasticmq.conf:/opt/elasticmq.conf:ro
+
+  api:
+    <<: *app
+    environment:
+      <<: *local-aws
+      SPRING_PROFILES_ACTIVE: api
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      SPRING_CLOUD_AWS_SQS_ENDPOINT: http://sqs:9324
+      # Sized for DynamoDB Local (~40 transactions/s): 16 in flight keeps queueing under the 500 ms attempt timeout.
+      MAX_IN_FLIGHT_REQUESTS: ${MAX_IN_FLIGHT_REQUESTS:-16}
+      # A load test sends everything from one address; RATE_LIMIT_IP_RPS=0 turns the per-address limit off.
+      RATE_LIMIT_IP_RPS: ${RATE_LIMIT_IP_RPS:-100}
+    ports:
+      - "8080:8080"
+
+  worker:
+    <<: *app
+    environment:
+      <<: *local-aws
+      SPRING_PROFILES_ACTIVE: worker
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      SPRING_CLOUD_AWS_SQS_ENDPOINT: http://sqs:9324
+    ports:
+      - "8081:8080"

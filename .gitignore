@@ -1,4 +1,3 @@
-@ -0,0 +1,62 @@
 ### EVENT MANAGEMENT PLATFORM ###
 
 ### Java ###
@@ -19,7 +18,6 @@ logs/
 .classpath
 .project
 .settings/
-.claude/
 
 ### OS ###
 .DS_Store
@@ -29,7 +27,7 @@ Thumbs.db
 ### Docker local data ###
 localstack-data/
 dynamodb-local-data/
-data/
+/data/
 
 ### AWS credentials ###
 .aws/
@@ -100,3 +98,5 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+# Lock files created when running `terraform test` inside a module; the root lock file is the one that pins.
+infrastructure/terraform/modules/*/.terraform.lock.hcl

@@ -19,8 +19,8 @@
 
     <properties>
         <java.version>25</java.version>
-        <awssdk.version>2.57.5</awssdk.version>
-        <spring-cloud-aws.version>4.2.1</spring-cloud-aws.version>
+        <awssdk.version>2.59.1</awssdk.version>
+        <spring-cloud-aws.version>4.2.2</spring-cloud-aws.version>
         <archunit.version>1.5.1</archunit.version>
         <jacoco.version>0.8.16</jacoco.version>
         <jacoco.line.minimum>0.90</jacoco.line.minimum>
